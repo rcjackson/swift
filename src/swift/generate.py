@@ -157,6 +157,70 @@ def rollout_and_save(
 # ----------------------------------------------------------------------------
 
 
+def direct_forecast_and_save(
+    sampler: Callable[..., torch.Tensor],
+    dataloader: DataLoader,
+    members: int,
+    ofile: str,
+    device: torch.device,
+    args: argparse.Namespace,
+):
+    """Obs-only, direct forecast: no autoregression, no forcings, no state input.
+
+    The condition ``X`` is the full gridded-observation tensor; a single sampler
+    call yields the future state at lead time ``args.interval``. The prediction is
+    written at ``prediction_timedelta`` index 1 (index 0 == analysis, which an
+    obs-only model does not produce, is left at its fill value).
+    """
+    assert args.dump == "zarr", "obs-only direct forecast supports zarr output only"
+    store = zarr.open_group(ofile, mode="a")
+
+    var_indices, index_counter = {}, 0
+    for var, levels in io.compress_variables(dataloader.dataset.variables).items():
+        if levels:
+            var_indices[var] = list(range(index_counter, index_counter + len(levels)))
+            index_counter += len(levels)
+        else:
+            var_indices[var] = [index_counter]
+            index_counter += 1
+
+    rank = ezpz.get_rank()
+    world_size = ezpz.get_world_size()
+
+    with torch.no_grad():
+        for m in tqdm(
+            range(rank, members, world_size), desc="member", disable=(rank != 0)
+        ):
+            generator = torch.Generator(device=device).manual_seed(m)
+            n_samples = 0
+            for (X, _), (idx, _) in tqdm(
+                dataloader, desc="batch", leave=False, disable=(rank != 0)
+            ):
+                X = X.to(device, non_blocking=True)  # full obs condition (2V channels)
+                bs = X.size(0)
+
+                Y = sampler(X, generator=generator)  # direct -> future state
+                pred = (
+                    dataloader.dataset.unstandardize_t(Y, delta=int(args.interval))
+                    .cpu()
+                    .numpy()
+                )
+
+                for var, indices in var_indices.items():
+                    if len(indices) == 1:  # single-level variable
+                        store[var][n_samples : n_samples + bs, m, 1] = pred[
+                            :, indices[0]
+                        ]
+                    else:  # multi-level variable (stack along 'level' dimension)
+                        stacked = np.stack([pred[:, i] for i in indices], axis=1)
+                        store[var][n_samples : n_samples + bs, m, 1, :] = stacked
+
+                n_samples += bs
+
+
+# ----------------------------------------------------------------------------
+
+
 def main(args):
     cfg = OmegaConf.load(os.path.join(args.input, ".hydra", "config.yaml"))
     _ = ezpz.setup_torch(backend=cfg.system.torch.backend)
@@ -170,6 +234,10 @@ def main(args):
 
     io.log0("Loading dataset...")
     dataset: Dataset = instantiate(cfg.data.dataset, split="test", _convert_="object")
+    # obs-only datasets forecast a single future state directly (no autoregression)
+    obs_mode = getattr(dataset, "obs_variables", None) is not None
+    if obs_mode:
+        args.steps = 1  # analysis (t=0) + single direct forecast at args.interval
     if args.samples == -1:
         indices = list(range(len(dataset)))
         # indices = indices[928:989] # for tropical cyclone (Laura)
@@ -262,15 +330,25 @@ def main(args):
 
     io.log0(f"Rolling out samples...")
     start_t = time.time()
-    rollout_and_save(
-        sampler,
-        dataloader,
-        args.members,
-        args.steps,
-        ofile,
-        ezpz.get_torch_device(as_torch_device=True),
-        args,
-    )
+    if obs_mode:
+        direct_forecast_and_save(
+            sampler,
+            dataloader,
+            args.members,
+            ofile,
+            ezpz.get_torch_device(as_torch_device=True),
+            args,
+        )
+    else:
+        rollout_and_save(
+            sampler,
+            dataloader,
+            args.members,
+            args.steps,
+            ofile,
+            ezpz.get_torch_device(as_torch_device=True),
+            args,
+        )
     io.log0(f"Done! Took {time.time() - start_t:.3f} seconds.")
 
     io.log0("Cleaning up!")

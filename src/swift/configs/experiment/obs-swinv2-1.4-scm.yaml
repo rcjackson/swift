@@ -1,0 +1,50 @@
+# @package _global_
+# Obs-only, direct 1-2 step forecast. Same Swin-v2 backbone as era5-swinv2-1.4-scm;
+# only the data source (condition = gridded observations) differs. The roll-out
+# validation path in train.py is gated on "era5" in the dataset target, so it is
+# automatically skipped here (obs forecasting is direct, not autoregressive).
+defaults:
+  - /data: obs-1.4
+  - /model: swinv2
+  - /loss: scm
+  - /precond: pass
+  - /solver: scm
+  - override /loss/noise: loguniform
+  - override /optimizer: muon
+
+distill: null
+
+loss:
+  tangent_warmup_kimg: 3000
+  noise:
+    sigma_max: 200
+
+solver:
+  sigma_max: 200
+
+model:
+  window_size: [16, 16]
+  shift_size: [8, 8]
+  patch_size: [2, 2]
+  ## 253M
+  depth: 12
+  dim: 1056
+  heads: 12
+
+data:
+  batch_size: 1
+  data_workers: 4
+  val_local_batch_size: 4
+
+trainer:
+  total_kimg: 15000 # 15 mimg
+  ema_halflife_kimg: 500
+  lr_rampup_kimg: 2000 # 2 mimg
+  lr_min_factor: 0.0001
+  lr_cosine_anneal: true
+  kimg_per_tick: 1
+  checkpoint_ticks: 500
+  val_ticks: null   # direct forecast: no autoregressive roll-out validation
+  val_target_interval: 8
+
+experiment_name: obs-swinv2-1.4-scm

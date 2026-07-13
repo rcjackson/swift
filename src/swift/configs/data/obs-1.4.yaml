@@ -1,0 +1,21 @@
+# @package data
+# Observation-only, direct 1-2 step forecasting.
+# Inherits the state *target* variables + root from era5-flare-1.4 and swaps the
+# dataset for ObsForecastDataset, whose condition is gridded observations.
+defaults:
+  - era5-flare-1.4
+
+dataset:
+  _target_: swift.data.obs.ObsForecastDataset
+  # observations (condition) -----------------------------------------------
+  obs_zarr: /lus/flare/projects/SAFS/jstock/data/wb2/obs/obs-surface.zarr
+  obs_variables:
+    - 2t
+    - 2d
+    - msl
+    - 10u
+    - 10v
+    - sst
+  # obs_stats_dir defaults to `root` (obs_normalize_*.npz live beside state stats)
+  intervals: [6, 12]   # direct lead times (1-2 steps at 6h base); no autoregression
+  dropout_p: 0.1       # per-variable dropout -> robust to changing instrument set
