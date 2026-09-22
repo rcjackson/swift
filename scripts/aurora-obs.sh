@@ -1,9 +1,9 @@
 #!/bin/bash -l
 #PBS -l select=1
-#PBS -l walltime=01:00:00
+#PBS -l walltime=06:00:00
 #PBS -l place=scatter
 #PBS -l filesystems=home:flare
-#PBS -q debug
+#PBS -q small
 #PBS -A Swift-Reanalysis
 #PBS -k doe
 #PBS -j oe
@@ -17,6 +17,11 @@
 #
 #   qsub -v EXPERIMENT=obs-nnja-swinv2-1.4-scm scripts/aurora-obs.sh
 #   qsub -v EXPERIMENT=obs-nnja-swinv2-1.4-scm,LOCAL_BATCH_SIZE=4 scripts/aurora-obs.sh
+#
+# `small` rather than `debug`: debug caps at 1h and is heavily contended.
+# 500 kimg at global batch 48 is ~10.4k optimizer steps; the verification run
+# measured ~0.6 s/step per tile, so ~1.7h. 6h of walltime leaves room for a
+# slower-than-expected start without wasting the allocation.
 
 echo "Job started at: $(date '+%Y-%m-%d-%H%M%S')"
 
