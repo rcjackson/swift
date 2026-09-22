@@ -21,6 +21,23 @@ defaults:
 
 distill: null
 
+# Muon's default lr: 0.02 is tuned for the paper's setup and diverges here.
+# Measured on run 000-lr0.02-diverged: the loss FELL while the LR was still
+# ramping (0.503 -> 0.268 by 19 kimg) and then rose monotonically as the LR
+# reached its 0.02 peak -- 0.37 (0-25 kimg) -> 0.46 -> 0.54 -> 0.57 -> 0.59 ->
+# 0.62 (125-200 kimg). Classic LR-too-high-for-the-batch behaviour, not a data
+# problem.
+#
+#            | paper                   | here
+#   model    | 253M (depth12/dim1056)  | 17.6M (depth6/dim384)
+#   global b | ~120                    | 48
+#   rampup   | 2000 kimg               | 200 kimg (was 50)
+#
+# 0.008 is linear batch scaling: 0.02 * 48/120. (sqrt scaling would give
+# 0.0126; linear is the safer choice given the run already diverged.)
+optimizer:
+  lr: 0.008
+
 # sigma_data is the ACTUAL data scale in the SCM noise schedule
 # (`t = atan(tau/sigma_data)`, `z = randn * sigma_data`), not a free knob.
 # On observation grids ~89% of every plane is imputed to exactly zero, so the
@@ -68,7 +85,10 @@ trainer:
   #   bash scripts/chain-resume.sh -s 0 -n 2 -b 4 -e obs-nnja-swinv2-1.4-scm
   total_kimg: 500
   ema_halflife_kimg: 50
-  lr_rampup_kimg: 50
+  # 200/500 = 40% of the run, against the paper's 2000/15000 = 13%. Longer
+  # than proportional on purpose: the previous run reached full LR by 10% and
+  # diverged, and a slow ramp is the cheapest insurance on a short run.
+  lr_rampup_kimg: 200
   lr_min_factor: 0.0001
   lr_cosine_anneal: true
   kimg_per_tick: 1
