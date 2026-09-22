@@ -56,16 +56,26 @@ data:
   val_local_batch_size: 4
 
 trainer:
-  # 250 kimg ~ 5.2k steps at global batch 48, ~0.9h -- sized to fit debug's 1h
-  # walltime with margin for startup. Extend by chaining:
-  #   bash scripts/chain-resume.sh -s 0 -n 3 -b 4 -e obs-nnja-swinv2-1.4-scm
-  total_kimg: 250
+  # total_kimg is CUMULATIVE across a resume chain, not a per-job budget:
+  # train.py:60 reloads the previous run's saved hydra config on resume, and
+  # trainer.py:314 starts at `resume_kimg * 1000` -- recovered from the
+  # checkpoint FILENAME -- and stops at `total_kimg * 1000`. So this is the
+  # chain's finish line; shrinking it to fit one job just stops the model
+  # sooner rather than making it fit.
+  #
+  # A 1h debug job yields ~56 min of training after startup, ~5.6k steps at
+  # global batch 48 = ~270 kimg. 500 kimg is therefore roughly two jobs:
+  #   bash scripts/chain-resume.sh -s 0 -n 2 -b 4 -e obs-nnja-swinv2-1.4-scm
+  total_kimg: 500
   ema_halflife_kimg: 50
   lr_rampup_kimg: 50
   lr_min_factor: 0.0001
   lr_cosine_anneal: true
   kimg_per_tick: 1
-  checkpoint_ticks: 25   # frequent: a killed job must not lose the run
+  # ~2 min of work at risk when a job is killed at the 1h wall: a tick is 21
+  # steps at global batch 48, and ~0.6 s/step was measured. Checkpoints for a
+  # 17.6M-param model are small, so the tighter cadence is nearly free.
+  checkpoint_ticks: 10
   val_ticks: 25
   val_target_interval: 8
 
