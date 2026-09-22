@@ -13,11 +13,17 @@ Usage: $0 [-s START] [-n COUNT] [-b BATCH] [-e EXPER]
   -n COUNT     number of jobs (default 4)
   -b BATCH     local batch size (default 1)
   -e EXPER     experiment name (required)
+
+Environment:
+  SCRIPT       PBS script to submit (default aurora-general.sh)
 EOF
   exit 1
 }
 
-SCRIPT="aurora-general.sh"
+# Job script is overridable: aurora-general.sh targets the SAFS project and a
+# venv that does not exist here, so the observation runs need aurora-obs.sh.
+#   SCRIPT=aurora-obs.sh bash chain-resume.sh -s 1 -n 1 -b 4 -e obs-nnja-...
+: ${SCRIPT:="aurora-general.sh"}
 
 START=0; COUNT=4; BATCH=1; EXPERIMENT=""
 while getopts "s:n:b:e:" opt; do

@@ -9,6 +9,13 @@
 #PBS -j oe
 #PBS -o /lus/flare/projects/Swift-Reanalysis/work/nnja/logs
 #PBS -N swift-obs
+# Mail on abort and on end. Sent by the PBS server, not by this login node's
+# postfix -- a test message from the login node relay did NOT arrive, so the
+# scheduler is the more likely path. Treat the on-disk report as authoritative
+# and this as a convenience:
+#   work/nnja/reports/report-<jobid>.md   (written by the job, always)
+#PBS -M rjackson@anl.gov
+#PBS -m ae
 
 # Swift on gridded observations. Adapted from aurora-general.sh; the project,
 # queue and environment differ (that script targets SAFS and a venv we do not
@@ -140,3 +147,14 @@ run_cmd="${DIST_LAUNCH} python3 -m swift.train \
     resume=${resume}"
 
 eval "${run_cmd}"
+TRAIN_RC=$?
+
+# Always write the report, including after a failure -- "no checkpoints, loss
+# never logged" is itself the finding, and PBS mail carries no detail. Runs on
+# one rank only; DIST_LAUNCH is deliberately not used here.
+echo
+echo "===== report ====="
+python3 /lus/flare/projects/Swift-Reanalysis/work/nnja/make_report.py \
+    --jobid "${PBS_JOBID:-local}" || true
+
+exit $TRAIN_RC
