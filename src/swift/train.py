@@ -225,8 +225,17 @@ def main(cfg: DictConfig):
         cfg.trainer.val_ticks is not None
         and "era5" in str(cfg.data.dataset._target_).lower()
     ):
+        # Pick the rollout class from the same module as the training dataset,
+        # so an observation dataset validates against observation rollouts
+        # rather than against ERA5 files that are not there.
+        _train_target = str(cfg.data.dataset._target_)
+        _rollout_target = (
+            _train_target.replace("Dataset", "RollOutDataset")
+            if _train_target.endswith("Dataset")
+            else "swift.data.era5.ERA5RollOutDataset"
+        )
         val_cfg = {
-            "_target_": "swift.data.era5.ERA5RollOutDataset",
+            "_target_": _rollout_target,
             "split": "val",
             "root": cfg.data.dataset.root,
             "variables": cfg.data.dataset.variables,

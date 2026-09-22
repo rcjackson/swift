@@ -1,0 +1,41 @@
+# @package data
+# NNJA gridded observations on Swift's 1.40625 deg grid.
+#
+# Distinct from `obs-1.4.yaml` on the `obs_only` branch, which points at an
+# anemoi-derived obs zarr and pairs observations with an ERA5 target. Here the
+# observations ARE the target, so there is no ERA5 dependency at all.
+#
+# First evaluation: the 4 surface variables only. They fill ~11% of cells per
+# 6-hour window, which is the density regime published observation-trained
+# models work in. The 65 upper-air channels sit at ~0.93% and are deliberately
+# left out until the surface case reads clean -- see swift/CLAUDE.md.
+#
+# toa_incident_solar_radiation is the one forcing, and it matters more than it
+# looks: the 6h 2t increment is dominated by the diurnal cycle. Measured on the
+# train split, a baseline knowing only the analysis hour plus a per-cell mean
+# increment cuts RMSE from 4.614 K to 2.441 K -- 47%. Without a time-of-day
+# input the model cannot reach that at all, and a null result would be
+# uninterpretable. Computed by work/nnja/make_toa.py (solar geometry, no data
+# source), in the WB2 `tisr` convention: J/m^2 accumulated over the 1 hour
+# ending at the analysis time.
+# geopotential_at_surface / land_sea_mask are still absent -- they would have to
+# come from the ERA5 side.
+defaults:
+  - defaults
+
+batch_size: 64          # small dataset; 1216 train windows
+data_workers: 4
+val_local_batch_size: 4
+
+dataset:
+  _target_: swift.data.era5_obs.ERA5ObsDataset
+  root: /lus/flare/projects/Swift-Reanalysis/work/nnja/swift_root
+  intervals: [6]        # 6h IS the reanalysis cycle, not a step toward longer leads
+  min_count: 1          # a cell counts as observed at >= this many obs
+  variables:
+    - 2m_temperature
+    - 10m_u_component_of_wind
+    - 10m_v_component_of_wind
+    - mean_sea_level_pressure
+  forcings:
+    - toa_incident_solar_radiation

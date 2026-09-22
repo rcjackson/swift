@@ -32,6 +32,19 @@ def _calculate_latitude_weights(lat_dim: int) -> torch.Tensor:
     return w_lat.view(1, 1, -1, 1)
 
 
+def _calculate_observation_weights(dataset) -> torch.Tensor:
+    """Per-cell observation weight, [1, C, H, W], or a scalar 1 for dense data.
+
+    Observation datasets expose `observation_weight()` giving how often each
+    cell is actually observed. Multiplying it into the loss confines the
+    gradient to the observing network -- without it, ~89% of every sparse field
+    is imputed climatology and the model would be trained to reproduce the mean
+    everywhere. Dense ERA5 datasets have no such method and get a no-op 1.0.
+    """
+    fn = getattr(dataset, "observation_weight", None)
+    return fn() if callable(fn) else torch.ones(1)
+
+
 def _calculate_variable_weights(variables: list[str]) -> torch.Tensor:
     single_level_weight_dict = {
         "2m_temperature": 1.0,
@@ -105,13 +118,14 @@ class EDMLoss(torch.nn.Module):
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
         self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(self, net, x, condition=None, auxiliary=None):
         sigma = self._sampling_fn(x)
         weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
         n = torch.randn_like(x) * sigma
         D_yn = net(x + n, sigma, condition, auxiliary)
-        return (weight * (self.w_var * self.w_lat * (D_yn - x) ** 2)).sum(dim=1).mean()
+        return (weight * (self.w_obs * self.w_var * self.w_lat * (D_yn - x) ** 2)).sum(dim=1).mean()
 
 
 class TrigFlowLoss(torch.nn.Module):
@@ -127,6 +141,7 @@ class TrigFlowLoss(torch.nn.Module):
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
         self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(self, net, x, condition=None, auxiliary=None, **kwargs):
         tau = self._sampling_fn(x)
@@ -152,7 +167,7 @@ class TrigFlowLoss(torch.nn.Module):
         return (
             (
                 (1 / torch.exp(logvar))
-                * (self.w_var * self.w_lat * torch.square(self.sigma_data * F_x - v_t))
+                * (self.w_obs * self.w_var * self.w_lat * torch.square(self.sigma_data * F_x - v_t))
                 + logvar
             )
             .sum(dim=1)
@@ -182,6 +197,7 @@ class SCMLoss(torch.nn.Module):
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
         self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(
         self,
@@ -209,12 +225,18 @@ class SCMLoss(torch.nn.Module):
         else:
             dxt_dt = cos_t * z - sin_t * x
 
+        # `net` is the DDP wrapper when distributed is initialized and the bare
+        # module otherwise (trainer.py:76-84) -- so unwrap defensively, the way
+        # lines 157/239 below already do. A hard `net.module` here crashes any
+        # single-process run, including the verification harness.
+        inner = getattr(net, "module", net)
+
         def wrapper(x, t) -> Tuple[torch.Tensor, torch.Tensor]:
-            return net.module(x, t, condition, auxiliary, jvp=True)  # unwrap module
+            return inner(x, t, condition, auxiliary, jvp=True)  # unwrap module
 
         v_x = cos_t * sin_t * dxt_dt / self.sigma_data
         v_t = cos_t * sin_t
-        with disable_forward_hooks(net.module):  # needed for wandb hooks
+        with disable_forward_hooks(inner):  # needed for wandb hooks
             _, dF_x = torch.func.jvp(
                 wrapper, (x_t / self.sigma_data, t), (v_x, v_t), has_aux=False
             )
@@ -252,7 +274,7 @@ class SCMLoss(torch.nn.Module):
         return (
             (
                 (weight / torch.exp(logvar))
-                * (self.w_var * self.w_lat * torch.square(F_x - F_x.detach() - g))
+                * (self.w_obs * self.w_var * self.w_lat * torch.square(F_x - F_x.detach() - g))
                 + logvar
             )
             .sum(dim=1)
@@ -273,6 +295,7 @@ class MSELoss(torch.nn.Module):
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
         self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(
         self,
@@ -300,7 +323,7 @@ class MSELoss(torch.nn.Module):
             x_unstd = self.dataset.unstandardize_x(cond)
             cond = self.dataset.standardize_x(x_unstd + y_unstd)
 
-        return (self.w_var * self.w_lat * (pred - target) ** 2).sum(dim=1).mean()
+        return (self.w_obs * self.w_var * self.w_lat * (pred - target) ** 2).sum(dim=1).mean()
 
 
 class CRPSLoss(torch.nn.Module):
@@ -324,6 +347,7 @@ class CRPSLoss(torch.nn.Module):
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
         self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
         self.batched_forward = torch.vmap(self._single_forward)
 
@@ -442,4 +466,4 @@ class CRPSLoss(torch.nn.Module):
         # NOTE: remove time dimension (dim 2)
         crps = self.batched_forward(target, preds).squeeze(2)  # (b, c, lat, lon)
 
-        return (self.w_var * self.w_lat * crps).sum(dim=1).mean()
+        return (self.w_obs * self.w_var * self.w_lat * crps).sum(dim=1).mean()

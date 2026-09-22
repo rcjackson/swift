@@ -1,0 +1,69 @@
+# @package _global_
+# Swift-B (SCM) on NNJA gridded observations, 4 surface variables, 6h.
+#
+# NAMING: deliberately `obs-nnja-*`, not `obs-*`. The `obs_only` branch already
+# carries an `obs-swinv2-1.4-scm.yaml` for a different design (observations as
+# condition, future ERA5 state as target, direct 1-2 step, no autoregression).
+# This one is the autoregressive, ERA5-free variant: observations are both the
+# input and the target. Keeping the names distinct lets both exist.
+#
+# Mirrors era5-swinv2-1.4-scm.yaml, with the model scaled down: 4 channels
+# instead of 69, and 1216 training windows instead of ~58k. The 253M-parameter
+# config would overfit this immediately.
+defaults:
+  - /data: obs-nnja-1.4
+  - /model: swinv2
+  - /loss: scm
+  - /precond: pass
+  - /solver: scm
+  - override /loss/noise: loguniform
+  - override /optimizer: muon
+
+distill: null
+
+# sigma_data is the ACTUAL data scale in the SCM noise schedule
+# (`t = atan(tau/sigma_data)`, `z = randn * sigma_data`), not a free knob.
+# On observation grids ~89% of every plane is imputed to exactly zero, so the
+# standardized residual field has std ~0.31, not the 1.0 the ERA5 configs use.
+# Measured on 120 train windows: input std 0.410, residual target std 0.311.
+# Leaving it at 1.0 does not error -- it just mis-calibrates the whole schedule.
+loss:
+  sigma_data: 0.31
+  tangent_warmup_kimg: 300
+  noise:
+    sigma_max: 200
+
+precond:
+  sigma_data: 0.31
+
+# NOTE: the solver takes sigma_data from the net (precond), not from its own
+# config -- see generating/diffusion.py:305 -- so it is set in `precond` above
+# and must NOT be repeated here; hydra would reject the unknown key.
+solver:
+  sigma_max: 200
+
+model:
+  window_size: [16, 16]
+  shift_size: [8, 8]
+  patch_size: [2, 2]
+  depth: 6
+  dim: 384
+  heads: 6
+
+data:
+  batch_size: 64
+  data_workers: 4
+  val_local_batch_size: 4
+
+trainer:
+  total_kimg: 500
+  ema_halflife_kimg: 50
+  lr_rampup_kimg: 50
+  lr_min_factor: 0.0001
+  lr_cosine_anneal: true
+  kimg_per_tick: 1
+  checkpoint_ticks: 100
+  val_ticks: 50
+  val_target_interval: 8
+
+experiment_name: obs-nnja-swinv2-1.4-scm
