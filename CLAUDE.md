@@ -1258,6 +1258,34 @@ with 4 variables + 1 forcing, 5 matches neither 4 nor 1 so the full stats array
 is used -- correct, but it would silently pick the wrong normalization if the
 counts ever collided.
 
+### The training budget is 3% of the paper's -- read early results accordingly
+
+The Swift paper trains **15,000 kimg with a 3,000 kimg tangent warmup**
+(`era5-swinv2-1.4-scm.yaml`). The observation config is scaled to what a 1-hour
+debug job allows:
+
+| setting | paper | obs | ratio |
+| --- | --- | --- | --- |
+| `total_kimg` | 15000 | 500 | **3.3%** |
+| `tangent_warmup_kimg` | 3000 | 300 | 10% |
+| `lr_rampup_kimg` | 2000 | 50 | 2.5% |
+| `ema_halflife_kimg` | 500 | 50 | 10% |
+
+The data gap is the sharper one. The paper sees ~58,000 distinct ERA5 states;
+we have **1,214 windows**. So 500 kimg is ~412 epochs against the paper's ~258
+-- *more* passes over **48x fewer distinct samples**. Whatever this run shows,
+it is not a test of the same thing the paper tested.
+
+At the measured ~8.2 s/kimg, matching the paper's 15 mimg would take ~34 hours
+= ~34 chained debug jobs; even reaching the 3 mimg warmup alone is ~7 jobs.
+
+**Consequence for interpretation:** a flat or worse-than-baseline result at 500
+kimg is weak evidence about whether Swift can learn from observations. It is
+consistent with (a) genuinely no signal, (b) nowhere near enough training, and
+(c) nowhere near enough distinct data -- and these numbers cannot separate them.
+Before concluding anything, either extend the chain substantially or build more
+years (2011+), which addresses the data gap rather than only the step count.
+
 ### Other expected difficulties, recorded before the run
 - **1214 training windows** against 500 kimg is ~400 epochs; expect the val
   curve, not the final number, to be the result.
