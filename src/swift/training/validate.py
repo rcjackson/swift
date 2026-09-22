@@ -98,16 +98,41 @@ def RMSE_rollout(
                         ...  # dist.all_gather()
 
                     # store rmse loss
-                    aggregate_rmse_loss += (
-                        torch.sqrt(torch.mean((Y_un - T_un) ** 2)).cpu().numpy()
-                    )
-                    arr_separate_rmse_loss[:, nth_day] += (
-                        torch.sqrt(
-                            torch.mean(w_lat * ((Y_un - T_un) ** 2), dim=(0, 2, 3))
+                    #
+                    # Observation targets carry NaN on unobserved cells: ~89% of
+                    # every plane. A plain torch.mean would return NaN for the
+                    # whole metric, and since this runs under no_grad it would
+                    # not fail loudly -- it would just make every logged val
+                    # number NaN and hide whether the model is learning.
+                    # Restricting to finite cells also makes the number mean the
+                    # right thing: skill where there are observations, directly
+                    # comparable to the persistence baseline.
+                    valid = torch.isfinite(T_un)
+                    if valid.all():
+                        aggregate_rmse_loss += (
+                            torch.sqrt(torch.mean((Y_un - T_un) ** 2)).cpu().numpy()
                         )
-                        .cpu()
-                        .numpy()
-                    )
+                        arr_separate_rmse_loss[:, nth_day] += (
+                            torch.sqrt(
+                                torch.mean(w_lat * ((Y_un - T_un) ** 2), dim=(0, 2, 3))
+                            )
+                            .cpu()
+                            .numpy()
+                        )
+                    else:
+                        se = torch.where(valid, (Y_un - T_un) ** 2,
+                                         torch.zeros_like(Y_un))
+                        cnt = valid.sum()
+                        aggregate_rmse_loss += (
+                            torch.sqrt(se.sum() / cnt.clamp(min=1)).cpu().numpy()
+                        )
+                        w = w_lat.expand_as(valid)
+                        wv = torch.where(valid, w, torch.zeros_like(w))
+                        num = (wv * se).sum(dim=(0, 2, 3))
+                        den = wv.sum(dim=(0, 2, 3)).clamp(min=1e-12)
+                        arr_separate_rmse_loss[:, nth_day] += (
+                            torch.sqrt(num / den).cpu().numpy()
+                        )
 
                 if residual:  # convert in real space
                     X = dataset.unstandardize_x(X)[
