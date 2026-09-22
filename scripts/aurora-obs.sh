@@ -1,9 +1,9 @@
 #!/bin/bash -l
 #PBS -l select=1
-#PBS -l walltime=06:00:00
+#PBS -l walltime=01:00:00
 #PBS -l place=scatter
 #PBS -l filesystems=home:flare
-#PBS -q small
+#PBS -q debug
 #PBS -A Swift-Reanalysis
 #PBS -k doe
 #PBS -j oe
@@ -18,10 +18,16 @@
 #   qsub -v EXPERIMENT=obs-nnja-swinv2-1.4-scm scripts/aurora-obs.sh
 #   qsub -v EXPERIMENT=obs-nnja-swinv2-1.4-scm,LOCAL_BATCH_SIZE=4 scripts/aurora-obs.sh
 #
-# `small` rather than `debug`: debug caps at 1h and is heavily contended.
+# `debug`, 1 node, 1h. The production queues (`prod`, `small`) all require
+# resources_min.nodect = 256, which is absurd for a 17.6M-param model on 1214
+# training windows -- so debug's 1h cap is the binding constraint, not a choice.
+#
 # 500 kimg at global batch 48 is ~10.4k optimizer steps; the verification run
-# measured ~0.6 s/step per tile, so ~1.7h. 6h of walltime leaves room for a
-# slower-than-expected start without wasting the allocation.
+# measured ~0.6 s/step per tile, so ~1.7h -- longer than one job. total_kimg is
+# therefore set so a run FITS in the hour, and chain-resume.sh can extend it:
+#   bash scripts/chain-resume.sh -s 0 -n 3 -b 4 -e obs-nnja-swinv2-1.4-scm
+# (that script chains PARTID=0,1,2 with PBS afterany dependencies, each
+# resuming the previous checkpoint).
 
 echo "Job started at: $(date '+%Y-%m-%d-%H%M%S')"
 

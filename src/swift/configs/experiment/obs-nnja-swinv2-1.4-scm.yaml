@@ -56,14 +56,17 @@ data:
   val_local_batch_size: 4
 
 trainer:
-  total_kimg: 500
+  # 250 kimg ~ 5.2k steps at global batch 48, ~0.9h -- sized to fit debug's 1h
+  # walltime with margin for startup. Extend by chaining:
+  #   bash scripts/chain-resume.sh -s 0 -n 3 -b 4 -e obs-nnja-swinv2-1.4-scm
+  total_kimg: 250
   ema_halflife_kimg: 50
   lr_rampup_kimg: 50
   lr_min_factor: 0.0001
   lr_cosine_anneal: true
   kimg_per_tick: 1
-  checkpoint_ticks: 100
-  val_ticks: 50
+  checkpoint_ticks: 25   # frequent: a killed job must not lose the run
+  val_ticks: 25
   val_target_interval: 8
 
 experiment_name: obs-nnja-swinv2-1.4-scm
