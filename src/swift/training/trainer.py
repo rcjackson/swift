@@ -486,8 +486,14 @@ class Trainer:
 
             if torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats()
-            elif torch.xpu.is_available() and ipex is not None:
-                ipex.xpu.reset_peak_memory_stats()
+            elif torch.xpu.is_available():
+                # IPEX 2.10 moved the memory-stats helpers from ipex.xpu onto
+                # torch.xpu; calling the old path raises AttributeError on the
+                # first tick and kills every rank.
+                if hasattr(torch.xpu, "reset_peak_memory_stats"):
+                    torch.xpu.reset_peak_memory_stats()
+                elif ipex is not None and hasattr(ipex.xpu, "reset_peak_memory_stats"):
+                    ipex.xpu.reset_peak_memory_stats()
 
             if (
                 (self.checkpoint_ticks is not None)

@@ -117,6 +117,17 @@ if missing:
     print("MISSING:", missing, file=sys.stderr)
     sys.exit(1)
 print("setup_torch signature:", inspect.signature(ezpz.setup_torch))
+
+# Same class of drift on the IPEX side: 2.10 moved the memory-stats helpers
+# from ipex.xpu onto torch.xpu, and trainer.py calls one of them on the FIRST
+# tick -- so the job dies minutes in, after the queue wait, having done nothing.
+import torch
+xpu_need = ["reset_peak_memory_stats", "max_memory_allocated", "max_memory_reserved"]
+xpu_missing = [n for n in xpu_need if not hasattr(torch.xpu, n)]
+if xpu_missing:
+    print("torch.xpu MISSING:", xpu_missing, file=sys.stderr)
+    sys.exit(1)
+print(f"torch.xpu memory helpers: {len(xpu_need)}/{len(xpu_need)} present")
 PYCHK
 if [ $? -ne 0 ]; then
   echo "ezpz API check FAILED -- not starting training" >&2
