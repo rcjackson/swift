@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import os
 import shutil
 import warnings
@@ -134,7 +135,15 @@ def distill_setup(cfg: DictConfig, dataset: Dataset) -> Tuple[DictConfig, str | 
 
 @hydra.main(version_base=None, config_path="configs", config_name="train")
 def main(cfg: DictConfig):
-    _ = ezpz.setup_torch(backend=cfg.system.torch.backend)
+    # ezpz dropped the `backend` kwarg (present <=0.26, gone by 0.27.3, where
+    # DDP is the default and parallelism is selected via *_parallel_size). Call
+    # it only if this build still accepts it, so the same tree runs against
+    # either version instead of dying at startup with
+    # `TypeError: setup_torch() got an unexpected keyword argument 'backend'`.
+    if "backend" in inspect.signature(ezpz.setup_torch).parameters:
+        _ = ezpz.setup_torch(backend=cfg.system.torch.backend)
+    else:
+        _ = ezpz.setup_torch()
     stats.init_multiprocessing(
         rank=ezpz.get_rank(),
         sync_device=torch.device(ezpz.get_torch_device_type()),

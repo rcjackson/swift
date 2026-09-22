@@ -98,6 +98,31 @@ BATCH_SIZE=$((num_gpus * LOCAL_BATCH_SIZE))
 
 echo "EXPERIMENT=$EXPERIMENT  PARTID=$PARTID  global batch=$BATCH_SIZE"
 
+# ezpz API drift check. The venv installs ezpz from git HEAD, which is newer
+# than what Swift was written against -- 0.27.3 dropped setup_torch(backend=),
+# and the job died at startup after a 40-minute queue wait. Importing ezpz
+# initializes MPI, so this cannot be checked from a login node; do it here,
+# before burning the walltime.
+python3 - <<'PYCHK'
+import inspect, sys
+import ezpz
+need = ["get_local_rank", "get_logger", "get_machine", "get_max_memory_allocated",
+        "get_max_memory_reserved", "get_rank", "get_torch_device",
+        "get_torch_device_type", "get_world_size", "History", "setup_torch",
+        "setup_wandb", "synchronize"]
+missing = [n for n in need if not hasattr(ezpz, n)]
+print(f"ezpz {getattr(ezpz, '__version__', '?')}: "
+      f"{len(need) - len(missing)}/{len(need)} symbols present")
+if missing:
+    print("MISSING:", missing, file=sys.stderr)
+    sys.exit(1)
+print("setup_torch signature:", inspect.signature(ezpz.setup_torch))
+PYCHK
+if [ $? -ne 0 ]; then
+  echo "ezpz API check FAILED -- not starting training" >&2
+  exit 1
+fi
+
 run_cmd="${DIST_LAUNCH} python3 -m swift.train \
     experiment=${EXPERIMENT} \
     data.batch_size=${BATCH_SIZE} \
