@@ -1286,6 +1286,48 @@ consistent with (a) genuinely no signal, (b) nowhere near enough training, and
 Before concluding anything, either extend the chain substantially or build more
 years (2011+), which addresses the data gap rather than only the step count.
 
+### If this run fails: extend to 2010-2020, surface only
+
+Decided 2026-09-22. The data gap (48x) is far larger than the step-count gap
+(3x), so more distinct samples is the higher-leverage fix -- and it is cheap.
+**Verified: `conv/adpsfc/NC000001` has all 4018 days of 2010-2020, no gaps**,
+17.4 GB of raw parquet.
+
+| | 2010 only | 2010-2020 |
+| --- | --- | --- |
+| windows | 1,214 train | **16,072** (13x) |
+| gridded size | 0.187 GB | **~2.1 GB** |
+| build time | ~7 min | **~1.3 h**, streamed, raw discarded |
+| 500 kimg = | 412 epochs | 31 epochs |
+| paper-equivalent 258 epochs | 15 kimg (!) | **~4,150 kimg** |
+
+That last row is the point: on one year, 500 kimg is already 412 epochs -- far
+past the paper's 258 -- so the model has seen its data to death without ever
+seeing much. On eleven years the same budget is 31 epochs, which is
+under-trained but *honest*, and ~4,150 kimg would match the paper's ratio.
+
+Build it with:
+
+```bash
+python nnja_grid_pilot.py --start 2011-01-01 --end 2020-12-31 \
+    --datasets adpsfc --out grids
+python make_toa.py --root grids --source adpsfc      # forcing for the new years
+python make_splits.py                                 # re-split chronologically
+python make_norm_stats.py --variables 2m_temperature,\
+10m_u_component_of_wind,10m_v_component_of_wind,mean_sea_level_pressure,\
+toa_incident_solar_radiation --intervals 6
+```
+
+All four scripts skip existing output, so 2010 is not rebuilt. Two things to
+get right: **`make_splits.py` hardcodes the 2010 date ranges** and must be
+updated (e.g. train 2010-2018, val 2019, test 2020) -- a random split would
+leak, since neighbouring 6h windows are strongly correlated; and stats must be
+**recomputed**, since the current ones are fitted on ten months of 2010.
+
+Surface only, deliberately: `conv/adpupa` (upper air) starts 2010 too, but at
+~0.93% fill per level it is below anything published, and adding it would
+confound "more data" with "much harder target".
+
 ### Other expected difficulties, recorded before the run
 - **1214 training windows** against 500 kimg is ~400 epochs; expect the val
   curve, not the final number, to be the result.
