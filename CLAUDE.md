@@ -1328,6 +1328,35 @@ Surface only, deliberately: `conv/adpupa` (upper air) starts 2010 too, but at
 ~0.93% fill per level it is below anything published, and adding it would
 confound "more data" with "much harder target".
 
+### Derived fields must be rebuilt when the grids are extended
+
+Cost two jobs on 2026-09-23. The 11-year build ran `make_toa.py` while only 2010
+existed, then added 2011-2020 -- so the new years had no solar forcing. The run
+died instantiating the *validation* dataset:
+
+```
+ValueError: variables not present in any source under .../swift_root_11y/val:
+            ['toa_incident_solar_radiation']
+```
+
+The nasty part is that **train worked**. `_resolve_sources` reads the first file
+of each split, and train's first file is from 2010, which *does* have TOA. Only
+val (2019) and test (2020) failed. Had the split boundaries fallen differently,
+training could have started on an inconsistent dataset instead of erroring.
+
+Two rules follow, and the build order in this file already implied both:
+
+1. **TOA (and any derived field) is rebuilt after every grid extension**, not
+   once. `make_toa.py` is idempotent -- it skips windows that already have the
+   field -- so re-running it is cheap and always correct.
+2. **Statistics must be recomputed too.** Fitting TOA on 2010 alone while the
+   field spans eleven years mis-scales the channel silently; unlike the missing
+   field, nothing raises.
+
+`/tmp/finish11y.sh` encodes the check that would have caught this: sample the
+first, middle and last window of **all three splits**, not just whichever one
+happens to contain the original year.
+
 ### Other expected difficulties, recorded before the run
 - **1214 training windows** against 500 kimg is ~400 epochs; expect the val
   curve, not the final number, to be the result.
