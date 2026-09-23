@@ -1367,6 +1367,108 @@ happens to contain the original year.
   exactly this. Measure it rather than be surprised by it.
 - `w_obs` makes the loss value incomparable to ERA5 runs. Do not read across.
 
+## Session end 2026-09-23: where things stand
+
+### Headline: Swift DOES learn from sparse observations
+
+The 1-year pilot beat both baselines on the variables the loss weights.
+Scored with `eval_masked.py` (single 6h step, observed cells only, the same
+metric as the baselines), `checkpoint-000433`:
+
+| variable | model | persistence | diurnal clim | vs diurnal |
+| --- | --- | --- | --- | --- |
+| `2m_temperature` | **2.617 K** | 4.414 | 2.849 | **-8.1%** |
+| `mean_sea_level_pressure` | **381.0 Pa** | 474.9 | 456.9 | **-16.6%** |
+| `10m_u_component_of_wind` | 2.144 m/s | 2.049 | 1.977 | +8.4% |
+| `10m_v_component_of_wind` | 2.245 m/s | 2.135 | 2.082 | +7.8% |
+
+The collapse diagnostic is healthy: between-input variation is 40-46% of the
+spatial std, so the output tracks its input rather than being a constant field.
+
+Wind loses, which is expected -- `_calculate_variable_weights` gives 10u/10v a
+weight of 0.1 against 2t's 1.0, so the loss barely optimises them.
+
+### The mistake that cost the most time
+
+I spent several exchanges concluding the pilot had "flat validation, no
+learning" from Swift's built-in `val/rmse` (5.146 at init, 5.148 at 352 kimg).
+**That metric is autoregressive over three lead times and averages over every
+grid cell, including the ~89% never observed** -- which is precisely why
+`eval_masked.py` exists. Reasoning from it led to killing a healthy training
+chain on a false divergence diagnosis, and nearly to abandoning the approach.
+
+Two corollaries worth keeping:
+
+- **The SCM training loss is not a fit metric.** It rises with the noise
+  schedule; a rising loss is not divergence. The lr 0.02 -> 0.008 change was
+  made on that false premise (it is better justified on batch-scaling grounds,
+  but it fixed nothing -- 4x lower LR reproduced the same curve exactly).
+- **Always score with `eval_masked.py`** before drawing any conclusion.
+
+### Run in flight
+
+```
+8859250  PARTID=0  RUNNING   results/obs-nnja-11y-swinv2-1.4-scm/000
+8859273  PARTID=1  HELD      afterany:8859250
+```
+
+11-year data, 2 of a possible 8 jobs, ~800 of 3397 kimg. Validation so far
+(**in-training metric, NOT comparable to the table above**):
+
+```
+kimg     2t      u      v     msl
+   0  5.403  2.049  2.054   448.9
+  25  5.335  2.022  2.047   501.0   <- msl spike
+  50  5.394  2.081  2.104   432.3
+  75  5.284  2.153  2.192   408.2
+ 100  5.250  2.082  2.100   383.0
+ 126  5.185  2.077  2.101   335.3
+```
+
+msl falls 449 -> 335 (-25%) and 2t 5.40 -> 5.19 (-4%). Encouraging, and a
+different shape from the pilot (which oscillated with no direction) -- but note
+the kimg=25 msl **spike to 501**, so this is not strictly monotonic and four or
+five points is not a trend. The LR ramp runs to 453 kimg, so at kimg 126 the
+model is at ~28% of full LR and still in the regime where anything improves.
+
+**Two jobs may not be enough.** The schedule is calibrated for the full 3397
+kimg (ramp 453 = 13% of training, matching the paper); at 800 kimg the ramp is
+57% of the run. If the curve is ambiguous when the chain ends, extend to 8 jobs
+rather than re-tuning.
+
+### Next steps, in order
+
+1. When `8859273` finishes, score its last checkpoint:
+   ```
+   module load frameworks hdf5/1.14.6
+   source /lus/flare/projects/Swift-Reanalysis/swift/venv/bin/activate
+   python work/nnja/eval_masked.py --split test --delta 6 \
+       --experiment obs-nnja-11y-swinv2-1.4-scm \
+       --checkpoint <results/obs-nnja-11y-.../001/checkpoints/checkpoint-*.pt>
+   ```
+   Compare against **2.617 K / 381.0 Pa** (the pilot), not the baselines.
+   NOTE: the 11y test split is 2020, the pilot's was Dec 2010 -- so the
+   baselines must be recomputed on the new split before comparing.
+2. Extend the chain if the answer is ambiguous:
+   `SCRIPT=aurora-obs.sh bash scripts/chain-resume.sh -s 2 -n 6 -b 4 -e obs-nnja-11y-swinv2-1.4-scm`
+   (submit one at a time -- `debug` allows ONE queued job per user)
+3. If wind still loses, try raising its `w_var` weight above 0.1 -- that is the
+   most likely cause, not the data.
+
+### Infrastructure notes
+
+- Branch `swift_obs` on `rcjackson/swift`, pushed. No file overlap with the
+  earlier `obs_only` branch (different design: obs condition an ERA5 target).
+- `swift_root` = 2010 pilot; `swift_root_11y` = 2010-2020. Both intact.
+- `results/.../000-lr0.02-diverged` is the original 1-year run, kept as the
+  comparison curve.
+- Four separate API-drift failures cost a queue cycle each: `ezpz.setup_torch`
+  dropped `backend=`, IPEX 2.10 moved the memory helpers to `torch.xpu`,
+  `PassPrecond` takes `model_config` not a model, and hydra needs
+  `_recursive_=False` there. `aurora-obs.sh` now preflights the first two.
+- `debug` is the only usable queue (prod/small/medium need >=256 nodes), 1h cap,
+  ONE queued job per user.
+
 ## Still open
 
 Items 1-6 belong to the **AIFS-DOP path**; they only matter if that pipeline is
