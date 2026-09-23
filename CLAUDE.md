@@ -1418,18 +1418,25 @@ Two corollaries worth keeping:
 ```
 kimg     2t      u      v     msl
    0  5.403  2.049  2.054   448.9
-  25  5.335  2.022  2.047   501.0   <- msl spike
+  25  5.335  2.022  2.047   501.0
   50  5.394  2.081  2.104   432.3
   75  5.284  2.153  2.192   408.2
  100  5.250  2.082  2.100   383.0
  126  5.185  2.077  2.101   335.3
+ 151  5.220  2.077  2.101   427.0   <- msl back up 27%
 ```
 
-msl falls 449 -> 335 (-25%) and 2t 5.40 -> 5.19 (-4%). Encouraging, and a
-different shape from the pilot (which oscillated with no direction) -- but note
-the kimg=25 msl **spike to 501**, so this is not strictly monotonic and four or
-five points is not a trend. The LR ramp runs to 453 kimg, so at kimg 126 the
-model is at ~28% of full LR and still in the regime where anything improves.
+**This is noise, not a trend.** msl looked like a clean -25% decline through
+kimg 126 and then jumped back to 427 -- its full range is 335-501 with a std of
+48, so the "decline" was within the scatter. 2t is tighter (range 5.185-5.403,
+std 0.078) but also turned up at 151.
+
+I described this series as monotonic while it was still four points long. It was
+not, and this is the second time in one session that reading a trend into the
+in-training metric produced a wrong call. Do not interpret this curve at all --
+score checkpoints with `eval_masked.py`.
+
+The LR ramp runs to 453 kimg, so at 151 the model is ~33% through it.
 
 **Two jobs may not be enough.** The schedule is calibrated for the full 3397
 kimg (ramp 453 = 13% of training, matching the paper); at 800 kimg the ramp is
