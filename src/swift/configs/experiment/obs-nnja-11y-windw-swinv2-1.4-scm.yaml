@@ -1,0 +1,109 @@
+# @package _global_
+# Wind-weight ablation of obs-nnja-11y-swinv2-1.4-scm. IDENTICAL except for
+# loss.var_weights below, so the two runs are directly comparable.
+#
+# Motivation: the baseline run leaves 10u/10v 1-2% BEHIND the diurnal bar while
+# 2t and msl clear it comfortably. The obvious suspect is
+# _calculate_variable_weights, which gives wind 0.1 against 2t's 1.0.
+#
+# But that is not the whole story, and the ablation is worth running precisely
+# because the naive explanation is incomplete:
+#
+#   * msl carries the SAME 0.1 weight and beats its bar by 21.8%.
+#   * wind is intrinsically much less predictable at 6h. Measured on the test
+#     split: 6h-increment std / field std is 0.71-0.74 for wind against
+#     0.32-0.35 for 2t/msl, and the 6h lag-1 autocorrelation is 0.73-0.75
+#     against 0.94-0.95.
+#
+# So wind may be near its own predictability ceiling rather than starved of
+# gradient. This run separates the two: if skill barely moves, the weight was
+# not the binding constraint.
+#
+# Weights are normalised to sum to 1, so raising wind to 0.5 takes share FROM
+# 2t and msl -- expect those to degrade somewhat. That trade is the result.
+#
+# Swift-B (SCM) on 11 years of NNJA surface observations, 6h.
+#
+# Differs from obs-nnja-swinv2-1.4-scm.yaml only in the data and the schedules.
+# The pilot on one year showed flat validation across 433 kimg -- 2t RMSE 5.146
+# at init and 5.148 at the end -- and that was NOT a learning-rate problem
+# (4x lower LR reproduced it exactly).
+#
+# The scale problem is twofold, and the second half is easy to miss:
+#
+#   1. distinct states: 1,214 vs the paper's ~58,000 (48x)
+#   2. every schedule here is denominated in kimg, but an epoch on the pilot was
+#      1.214 kimg against the paper's 58. So `tangent_warmup_kimg: 300`, meant
+#      as a brief stabilisation, actually spanned 247 epochs -- the paper's
+#      3000-kimg warmup is 52 epochs of ITS data. LR rampup and EMA halflife
+#      were stretched the same way.
+#
+# On 13,134 windows an epoch is 13.13 kimg, so the schedules below are set to
+# match the paper's EPOCH counts rather than its kimg counts:
+#
+#   tangent_warmup  51.7 epochs -> 679 kimg
+#   lr_rampup       34.5 epochs -> 453 kimg
+#   ema_halflife     8.6 epochs -> 113 kimg
+#   total          258.6 epochs -> 3397 kimg   (~8 chained debug jobs)
+defaults:
+  - /data: obs-nnja-11y-1.4
+  - /model: swinv2
+  - /loss: scm
+  - /precond: pass
+  - /solver: scm
+  - override /loss/noise: loguniform
+  - override /optimizer: muon
+
+distill: null
+
+# 0.008 = linear batch scaling from the paper's 0.02 at global batch ~120
+# (here 48). Kept from the pilot: it did not fix the flat validation, but it is
+# the better-justified value and there is no reason to go back to 0.02.
+optimizer:
+  lr: 0.008
+
+# sigma_data is the real data scale in the SCM schedule, not a free knob.
+# ~89% of every plane is imputed zero, so the standardized residual std is 0.31,
+# not the 1.0 the ERA5 configs use. Re-measure if the fill fraction changes.
+loss:
+  var_weights:
+    10m_u_component_of_wind: 0.5
+    10m_v_component_of_wind: 0.5
+  sigma_data: 0.31
+  tangent_warmup_kimg: 679
+  noise:
+    sigma_max: 200
+
+precond:
+  sigma_data: 0.31
+
+# the solver reads sigma_data from the net, not from here
+solver:
+  sigma_max: 200
+
+model:
+  window_size: [16, 16]
+  shift_size: [8, 8]
+  patch_size: [2, 2]
+  depth: 6
+  dim: 384
+  heads: 6
+
+data:
+  batch_size: 48
+  data_workers: 4
+  val_local_batch_size: 4
+
+trainer:
+  # cumulative across a resume chain; ~8 chained 1h debug jobs
+  total_kimg: 3397
+  ema_halflife_kimg: 113
+  lr_rampup_kimg: 453
+  lr_min_factor: 0.0001
+  lr_cosine_anneal: true
+  kimg_per_tick: 1
+  checkpoint_ticks: 10
+  val_ticks: 25
+  val_target_interval: 8
+
+experiment_name: obs-nnja-11y-windw-swinv2-1.4-scm

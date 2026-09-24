@@ -45,7 +45,15 @@ def _calculate_observation_weights(dataset) -> torch.Tensor:
     return fn() if callable(fn) else torch.ones(1)
 
 
-def _calculate_variable_weights(variables: list[str]) -> torch.Tensor:
+def _calculate_variable_weights(
+    variables: list[str], overrides: dict[str, float] | None = None
+) -> torch.Tensor:
+    """Per-variable loss weights, normalised to sum to 1.
+
+    `overrides` replaces individual entries before normalisation, so an
+    experiment can reweight a variable without editing this table. Note the
+    normalisation: raising one weight lowers every other variable's share.
+    """
     single_level_weight_dict = {
         "2m_temperature": 1.0,
         "sea_surface_temperature": 0.1,
@@ -63,6 +71,11 @@ def _calculate_variable_weights(variables: list[str]) -> torch.Tensor:
             pressure_level_weight_dict[var + "_" + str(l)] = w
 
     weights = {**single_level_weight_dict, **pressure_level_weight_dict}
+    if overrides:
+        unknown = [k for k in overrides if k not in weights]
+        if unknown:
+            raise KeyError(f"unknown variable in weight overrides: {unknown}")
+        weights = {**weights, **overrides}
     weights = torch.Tensor([weights[var] for var in variables]).view(1, -1, 1, 1)
     weights = weights / weights.sum()
     return weights
@@ -108,7 +121,8 @@ def disable_forward_hooks(module):
 class EDMLoss(torch.nn.Module):
     """Elucidating Diffusion Models (EDM) Loss"""
 
-    def __init__(self, dataset, noise: dict[str, float | str], sigma_data: float):
+    def __init__(self, dataset, noise: dict[str, float | str], sigma_data: float,
+                 var_weights: dict | None = None):
         super().__init__()
         self.cfg = noise.copy()
         self._sampling_fn = partial(
@@ -117,7 +131,9 @@ class EDMLoss(torch.nn.Module):
         self.sigma_data = sigma_data
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
-        self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer(
+            "w_var", _calculate_variable_weights(dataset.variables, var_weights)
+        )
         self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(self, net, x, condition=None, auxiliary=None):
@@ -131,7 +147,8 @@ class EDMLoss(torch.nn.Module):
 class TrigFlowLoss(torch.nn.Module):
     """TrigFlow Diffusion Loss"""
 
-    def __init__(self, dataset, noise: dict[str, float | str], sigma_data: float):
+    def __init__(self, dataset, noise: dict[str, float | str], sigma_data: float,
+                 var_weights: dict | None = None):
         super().__init__()
         self.cfg = noise.copy()
         self._sampling_fn = partial(
@@ -140,7 +157,9 @@ class TrigFlowLoss(torch.nn.Module):
         self.sigma_data = sigma_data
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
-        self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer(
+            "w_var", _calculate_variable_weights(dataset.variables, var_weights)
+        )
         self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(self, net, x, condition=None, auxiliary=None, **kwargs):
@@ -185,6 +204,7 @@ class SCMLoss(torch.nn.Module):
         sigma_data: float,
         tangent_warmup_kimg: int = 0,
         distillation: bool = False,
+        var_weights: dict | None = None,
     ):
         super().__init__()
         self.cfg = noise.copy()
@@ -196,7 +216,9 @@ class SCMLoss(torch.nn.Module):
         self.distillation = distillation
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
-        self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer(
+            "w_var", _calculate_variable_weights(dataset.variables, var_weights)
+        )
         self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(
@@ -288,13 +310,15 @@ class SCMLoss(torch.nn.Module):
 class MSELoss(torch.nn.Module):
     """Multistep MSE Loss"""
 
-    def __init__(self, dataset, sigma_data: float):
+    def __init__(self, dataset, sigma_data: float, var_weights: dict | None = None):
         super().__init__()
         self.dataset = dataset
         self.sigma_data = sigma_data
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
-        self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer(
+            "w_var", _calculate_variable_weights(dataset.variables, var_weights)
+        )
         self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
     def forward(
@@ -338,6 +362,7 @@ class CRPSLoss(torch.nn.Module):
         sigma_data: float,
         ensemble_size: int = 2,
         alpha: float = 1.0,
+        var_weights: dict | None = None,
     ):
         super().__init__()
         self.dataset = dataset
@@ -346,7 +371,9 @@ class CRPSLoss(torch.nn.Module):
         self.alpha = alpha
 
         self.register_buffer("w_lat", _calculate_latitude_weights(dataset._shape[1]))
-        self.register_buffer("w_var", _calculate_variable_weights(dataset.variables))
+        self.register_buffer(
+            "w_var", _calculate_variable_weights(dataset.variables, var_weights)
+        )
         self.register_buffer("w_obs", _calculate_observation_weights(dataset))
 
         self.batched_forward = torch.vmap(self._single_forward)
