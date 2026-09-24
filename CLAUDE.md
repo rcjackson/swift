@@ -1730,6 +1730,20 @@ does this mechanically; re-run it on the full 11 years once stats are rebuilt.
    requires in every window anyway. (Checked, because this exact class of
    omission cost two jobs on 2026-09-23.)
 
+`work/nnja/finish_upperair.sh` does 1-4 unattended; it is armed on the build pid
+and aborts if fewer than 16,000 adpupa windows are on disk.
+
+**It builds a separate root, `swift_root_69v`.** `make_norm_stats.py` rewrites
+`normalize_*.npz` in place, and the wind-weight ablation chain is reading
+`swift_root_11y` right now -- a chained job starting mid-write would read a
+truncated npz, and even a clean rewrite would change the normalization between
+jobs in the same chain. The tree is symlinks, so a second root costs nothing.
+
+**`make_norm_stats.py` summary-table bug, fixed.** The final table hardcoded
+`diff[6]`, so `--intervals 12` (which is what upper air needs) died with
+`KeyError: 6` *after* writing every npz -- the output was fine but the run
+looked failed. It now reports `min(INTERVALS)`.
+
 **Expect a smaller train split.** Windows with only `adpsfc` are now correctly
 dropped, so the 69-variable run sees fewer samples than the surface run. That is
 the fix working, not data loss.
