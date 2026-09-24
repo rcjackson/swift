@@ -269,14 +269,21 @@ class ERA5ObsDataset(ERA5Dataset):
         # 14% of the loss mass lands on unobserved cells. Set 0.0 to ablate.
         #
         # An ABSOLUTE floor only behaves that way at surface density. Radiosonde
-        # channels fill ~0.97% of cells against 2t's 11.7%, so the same 0.02
-        # floor puts **67% of their loss mass on cells that are never observed**
-        # -- the model would mostly be trained to reproduce its own imputed
-        # climatology. With `relative_floor` the floor is a fraction of each
-        # channel's own mean frequency, which reproduces the surface behaviour
-        # (0.02 / 0.1167 = 0.171 -> 87% of mass on observed cells) and carries it
-        # to any density. Measured per channel, floor -> mass-on-observed:
-        #   t500   absolute 0.02 -> 33.4%,  relative 0.171 -> 87.3%
+        # channels fill ~0.9% of cells against 2t's 11.2%, so the same 0.02 floor
+        # is huge relative to their frequency field. The quantity to hold fixed
+        # is the floor's own SUBSIDY -- the share of total loss weight the floor
+        # adds on top of the real frequencies, i.e. the gradient spent off the
+        # observing network:
+        #
+        #   channel               fill%   abs 0.02   rel 0.171
+        #   2m_temperature        11.23     13.5%      13.0%
+        #   temperature_500        0.97     66.7%      14.3%
+        #   geopotential_1000      0.86     69.3%      14.3%
+        #
+        # At an absolute floor two thirds of upper-air gradient would train the
+        # model to reproduce its own imputed climatology. Expressed as a fraction
+        # of each channel's mean frequency, 0.171 (= 0.02 / 0.1167, the
+        # surface-equivalent value) holds the subsidy at ~14% at any density.
         if self.relative_floor:
             fl = self.weight_floor * w.mean(axis=(1, 2), keepdims=True)
         else:

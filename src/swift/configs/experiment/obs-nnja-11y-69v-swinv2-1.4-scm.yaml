@@ -16,14 +16,16 @@
 # counts the surface run used -- the calibration trap that cost the pilot: every
 # schedule here is in kimg but behaves in epochs.
 #
-# **sigma_data is 0.135, not 0.31.** That 0.31 was measured on 4 surface channels
+# **sigma_data is 0.137, not 0.31.** That 0.31 was measured on 4 surface channels
 # at ~11% fill. sigma_data is the real data scale in the SCM noise schedule, not
 # a free knob -- set it wrong and the training noise levels no longer straddle
-# the signal. With 65 more channels at ~0.97% fill, nearly every cell of nearly
+# the signal. With 65 more channels at ~0.9% fill, nearly every cell of nearly
 # every channel is an unpaired zero, and the realised std of the target tensor
-# drops to 0.135 (measured on 2010, 69 vars, 12h, 00/12Z inits -- a factor of
-# 2.3 below the surface value). Re-measure on the full 11 years once the stats
-# are rebuilt: work/nnja/measure_sigma_data.py --data obs-nnja-11y-69v-1.4
+# drops to 0.137 (measured on 2010 with the 69-variable stats actually built --
+# 12h, 00/12Z inits, 606 samples -- a factor of 2.3 below the surface value).
+# Per-channel it spans 0.02 (specific_humidity_100) to 0.33 (10m winds).
+# Re-measure on the full 11 years once the stats are rebuilt:
+#   work/nnja/measure_sigma_data.py --data obs-nnja-11y-69v-1.4
 #
 # **Variable weights need no override.** swift's own table already covers all 69
 # (pressure-level weights are level/sum(levels)), so the 65 upper-air channels
@@ -44,13 +46,13 @@ optimizer:
 
 loss:
   # measured, not copied -- see header
-  sigma_data: 0.135
+  sigma_data: 0.137
   tangent_warmup_kimg: 340
   noise:
     sigma_max: 200
 
 precond:
-  sigma_data: 0.135
+  sigma_data: 0.137
 
 solver:
   sigma_max: 200

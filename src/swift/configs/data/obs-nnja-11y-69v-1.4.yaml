@@ -28,11 +28,16 @@
 #    they actively dilute the gradient with all-zero targets.
 #
 # 3. **relative_floor: true.** The off-network weight floor has to scale with a
-#    channel's own coverage. An absolute 0.02 on a 0.97%-fill channel puts 67%
-#    of its loss mass on never-observed cells; expressed as a fraction of each
-#    channel's mean frequency, 0.171 reproduces the surface behaviour (87% of
-#    mass on observed cells) at every density. 0.02/0.1167 = 0.171 is exactly
-#    the surface-equivalent value, so surface channels are unaffected.
+#    channel's own coverage. The quantity to hold fixed is the floor's own
+#    subsidy -- the share of loss weight it adds on top of the real frequency
+#    field, i.e. the gradient spent off the observing network:
+#        channel            fill%   abs 0.02   rel 0.171
+#        2m_temperature     11.23     13.5%      13.0%
+#        temperature_500     0.97     66.7%      14.3%
+#        geopotential_1000   0.86     69.3%      14.3%
+#    An absolute 0.02 spends two thirds of upper-air gradient off-network.
+#    0.02/0.1167 = 0.171 is exactly the surface-equivalent value, so surface
+#    channels are unaffected (13.5% -> 13.0%).
 #
 # Coverage caveat: `conv/adpupa` begins 2010-01-01, the same as adpsfc, so the
 # date range is unchanged. But the upper-air windows are a SUBSET -- a window

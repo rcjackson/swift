@@ -1686,18 +1686,27 @@ project-wide one.
 2. **`relative_floor` (new, default `False`).** `weight_floor` puts a floor
    under the off-network loss weight so the model stays spatially coherent where
    it is never scored. An *absolute* 0.02 only behaves sensibly at surface
-   density. Share of each channel's loss mass landing on observed cells:
+   density. The quantity to hold fixed is the floor's own **subsidy** -- the
+   share of total loss weight the floor adds on top of the real frequency field,
+   which is exactly the gradient spent off the observing network:
 
-   | channel | fill | floor 0.02 | floor as 0.171 x mean fill |
+   | channel | fill | abs 0.02 | rel 0.171 |
    | --- | --- | --- | --- |
-   | 2m_temperature | 11.67% | 87.3% | 87.4% |
-   | temperature_500 | 0.97% | **33.4%** | 87.3% |
-   | specific_humidity_850 | 0.93% | 32.3% | 87.4% |
+   | 2m_temperature | 11.23% | 13.5% | 13.0% |
+   | temperature_500 | 0.97% | **66.7%** | 14.3% |
+   | geopotential_1000 | 0.86% | 69.3% | 14.3% |
 
    With the absolute floor two thirds of upper-air gradient would train the
    model to reproduce its own imputed climatology. Expressed as a fraction of
    each channel's own mean frequency, 0.171 (= 0.02 / 0.1167, the
-   surface-equivalent value) reproduces surface behaviour at any density.
+   surface-equivalent value) holds the subsidy near 14% at any density.
+
+   (An earlier draft of this section quoted "87.3% of loss mass on observed
+   cells" for the relative floor. That was wrong -- measured against the real
+   `obs_freq`, t500 reaches only 45.7% mass-on-observed even with the floor at
+   **zero**, because the frequency field is diffuse rather than concentrated.
+   The subsidy share above is the figure that actually holds constant, and it is
+   what the floor controls.)
 
 3. **`init_hours` (new, default `None`).** Restricts which synoptic hours may
    *start* a sample. Needed to realise the 67% above; meaningless for surface.
@@ -1705,11 +1714,13 @@ project-wide one.
 ### sigma_data must be re-measured, not copied
 
 `sigma_data` is the real scale of the target in the SCM noise schedule. The
-surface run uses **0.31**. Measured on the 69-variable/12h/00-12Z target
-(2010): **0.135** -- a factor of 2.3 lower, because nearly every cell of nearly
-every one of the 65 new channels is an unpaired zero. Copying 0.31 forward would
-have put the training noise levels well off the signal. `work/nnja/measure_sigma_data.py`
-does this mechanically; re-run it on the full 11 years once stats are rebuilt.
+surface run uses **0.31**. Measured on the 69-variable/12h/00-12Z target (2010,
+with the 69-variable stats actually built): **0.137** -- a factor of 2.3 lower,
+because nearly every cell of nearly every one of the 65 new channels is an
+unpaired zero. Per channel it spans 0.02 (`specific_humidity_100`) to 0.33 (the
+10 m winds). Copying 0.31 forward would have put the training noise levels well
+off the signal. `work/nnja/measure_sigma_data.py` does this mechanically; re-run
+it on the full 11 years once stats are rebuilt.
 
 ### New files
 
@@ -1861,7 +1872,7 @@ Live items for the **current path**:
       `ERA5ObsDataset` (both default-off, surface behaviour bit-identical),
       measured the delta schedule (6h puts **96% of upper-air loss mass on an
       artificial zero**; 12h + 00/12Z inits -> 67%), re-measured `sigma_data`
-      (0.135, not the surface run's 0.31), and wrote the 69-variable data and
+      (0.137, not the surface run's 0.31), and wrote the 69-variable data and
       experiment configs
 - [ ] Finish the adpupa 2011-2020 build, then rebuild splits (`--sources
       adpsfc,adpupa`) and norm stats (`--intervals 6,12,24`), and re-measure
