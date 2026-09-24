@@ -1558,6 +1558,63 @@ at 15 K the disagreement is too large to attribute to reference error.
 11% of cells with observations. Adding the ERA5 comparison was the user's
 suggestion and it found the one thing that most limits the result.
 
+### Longer conditioning window: measured, and NOT worth building
+
+arXiv:2609.10924 argues a single sparse snapshot under a climatological prior
+forfeits roughly half the achievable accuracy, and that ~8 observation windows
+recovers it. AIFS-DOP uses ~4 warm-up cycles. That makes a longer conditioning
+window the obvious next architectural change -- so it was measured first, on the
+2020 test split, rather than built.
+
+**Two probes, both negative.**
+
+*Coverage.* Extra history adds almost no new geography, because the observing
+network is static:
+
+```
+1 window    11.14% of cells observed at least once
+2 windows   11.57%
+4 windows   11.84%
+8 windows   11.98%
+```
+
+Eight windows buys **0.84 percentage points**. Whatever a longer window gives,
+it is not more of the map.
+
+*Tendency.* Then the gain would have to come from the rate of change. It does
+not -- a 2-window linear extrapolation is far WORSE than standing still:
+
+```
+persistence      4.6534 K
+linear extrap    6.8907 K   +48.1%
+damped 0.5       5.3900 K   +15.8%
+```
+
+The reason is in the correlation between consecutive tendencies:
+
+```
+2m_temperature            corr(past 6h, next 6h) = -0.072   (n=358,885)
+mean_sea_level_pressure                          = -0.016   (n=329,895)
+```
+
+**Negative.** At a 6-hour step the tendency ANTI-persists, because 6h is half
+the diurnal period: warming from 00->06Z is followed by cooling 06->12Z. The
+optimal damping coefficient is -0.07, i.e. essentially "ignore the tendency".
+
+**Conclusion:** the paper's argument assumes information accumulates across
+windows. On a static surface network at a 6-hour step it does not -- the
+geography is already saturated after one window, and the tendency is
+anti-correlated. A longer conditioning window would add input channels and
+training cost for a signal that measures out at |r| < 0.1.
+
+This does **not** rule it out for upper air (radiosondes are 12-hourly, so
+consecutive windows genuinely differ) or for a shorter step where the tendency
+would persist. It rules it out for this configuration.
+
+**The off-network problem is not an information problem** -- more history does
+not tell you about a cell that has never been observed. That needs a physical
+constraint or an explicit spatial prior, not a longer window.
+
 ### Report
 
 `work/nnja/report/swift-obs-training.pptx` -- 10 slides, figures in
