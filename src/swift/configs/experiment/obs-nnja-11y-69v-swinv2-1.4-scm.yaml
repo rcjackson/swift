@@ -55,12 +55,16 @@ defaults:
 distill: null
 
 optimizer:
-  lr: 0.008
+  # 0.008 is the surface run's value at global batch 48; this runs at 120. Linear
+  # scaling says 0.02, but this project already diverged once at high lr, so
+  # sqrt scaling is the first try: 0.008 * sqrt(2.5) = 0.0126. Read the first
+  # job's loss curve before chaining -- if it diverges, fall back to 0.008.
+  lr: 0.0126
 
 loss:
   # measured, not copied -- see header
   sigma_data: 0.137
-  tangent_warmup_kimg: 340
+  tangent_warmup_kimg: 679   # same fraction of total_kimg as the surface run
   noise:
     sigma_max: 200
 
@@ -80,15 +84,30 @@ model:
 
 data:
   batch_size: 48
-  data_workers: 4
+  data_workers: 7
   val_local_batch_size: 4
 
 trainer:
-  # epoch-matched to the surface run: ~6.6 kimg/epoch here vs 13.1 there, so the
-  # kimg figures are halved to hold the same number of passes over the data.
-  total_kimg: 1699
-  ema_halflife_kimg: 57
-  lr_rampup_kimg: 227
+  # Sized for **10 nodes on debug-scaling at LOCAL_BATCH_SIZE=1** (global batch
+  # 120), which is how the full Swift was trained. Two conversions matter and
+  # they pull in opposite directions:
+  #
+  #   epochs  init_hours halves the index, so an epoch is ~6.6 kimg here against
+  #           13.1 for the surface run.
+  #   steps   total_kimg is in IMAGES. Global batch 120 vs the surface run's 48
+  #           means each kimg buys 2.5x FEWER optimizer steps.
+  #
+  # Matching the surface baseline's 70,083 steps at batch 120 needs 8410 kimg.
+  # That is 1281 epochs, which is far past where an 11-year dataset has anything
+  # left to teach -- so this is capped at 3400 kimg (28,333 steps, 518 epochs,
+  # ~0.8 h of a 1h job) and the loss curve decides whether to extend. The
+  # surface run's own curve was flat well before its 3364.
+  #
+  # At 1 node / LOCAL_BATCH_SIZE=4 (global batch 48) these same figures give
+  # 70,833 steps and 5.2x the walltime -- correct but ~8 jobs. Prefer 10 nodes.
+  total_kimg: 3400
+  ema_halflife_kimg: 114
+  lr_rampup_kimg: 454
   lr_min_factor: 0.0001
   lr_cosine_anneal: true
   kimg_per_tick: 1
