@@ -2011,3 +2011,38 @@ write fds, last three files verified readable with the right diurnal signature
 (1.57% / 0.03% / 1.50% finite at 00/06/12Z). A `kill -TERM` cleared it.
 **Any script that waits on a gcsfs-using build pid must expect this** -- the
 pid outliving its own work is normal here, not a sign of unfinished output.
+
+### `set -u` + `module load` kills a script silently
+
+Lmod's bash init (`/usr/share/lmod/lmod/init/bash:211`) dereferences
+`ZSH_EVAL_CONTEXT` without a default. Under `set -u` that is a fatal
+"unbound variable" and the shell exits **127 immediately**, before the
+`module load` line completes.
+
+This cost an unattended pipeline run. `finish_upperair.sh` had:
+
+    set -u
+    ...
+    module load frameworks hdf5/1.14.6 >/dev/null 2>&1
+    source .../venv/bin/activate
+
+The `>/dev/null 2>&1` swallowed the error, so the script died at step 2 with
+its last log line reading "step 2/3 norm stats" and no traceback, no ABORT,
+no exit message -- indistinguishable from "still running" for anything
+watching the log. Only `ps` showed the waiter was gone.
+
+Fix: drop `-u` across the module/venv block only, and assert afterwards.
+
+    set +u
+    module load frameworks hdf5/1.14.6 >/dev/null 2>&1
+    source .../venv/bin/activate
+    set -u
+    command -v python >/dev/null || { say "ABORT: no python after activate"; exit 1; }
+
+Two general rules this implies:
+  * never redirect `module load` to /dev/null in a script that also sets `-u`;
+  * a long unattended step should log a positive heartbeat (here, the resolved
+    `python` path), so "no new output" can be distinguished from "dead".
+
+None of `scripts/*.sh` combine `set -u` with `module load`, so the qsub launch
+path is unaffected -- this was a driver-script bug only.
