@@ -68,6 +68,8 @@ class ERA5ObsDataset(ERA5Dataset):
         residual: bool = False,
         min_count: int = 1,
         weight_floor: float = 0.02,
+        relative_floor: bool = False,
+        init_hours: list[int] | None = None,
     ):
         # NOTE: deliberately does not call super().__init__ -- that globs a flat
         # <root>/<split>/*.h5, and our windows are split across two source dirs.
@@ -83,6 +85,8 @@ class ERA5ObsDataset(ERA5Dataset):
         self.residual = residual
         self.min_count = min_count
         self.weight_floor = weight_floor
+        self.relative_floor = relative_floor
+        self.init_hours = None if init_hours is None else set(int(h) for h in init_hours)
 
         self._resolve_sources()
         self._build_index()
@@ -138,6 +142,13 @@ class ERA5ObsDataset(ERA5Dataset):
         t0, t1 = times[0], times[-1]
         n = int((t1 - t0).total_seconds() // 3600 // STEP_HOURS) + 1
 
+        # Only the sources that actually supply a requested variable matter. A
+        # window missing `adpupa` is perfectly usable for a surface-only run,
+        # but unusable the moment an upper-air variable is requested -- and
+        # `_load_window` indexes `handles[src]` directly, so an entry that is
+        # merely non-empty would raise KeyError mid-epoch rather than here.
+        needed = {self.var_source[v] for v in self.variables + self.forcings}
+
         self.times = [t0 + timedelta(hours=STEP_HOURS * i) for i in range(n)]
         self.files = []
         for t in self.times:
@@ -147,15 +158,27 @@ class ERA5ObsDataset(ERA5Dataset):
                 p = os.path.join(self.root, self.split, s, w)
                 if os.path.exists(p):
                     entry[s] = p
-            self.files.append(entry or None)
+            self.files.append(entry if needed <= entry.keys() else None)
 
         # A start is usable only if every frame it will reach exists. The
         # trainer may ask for offset>1 during multistep finetuning, so reserve
         # room for two hops of the longest interval.
         reach = 2 * (max(self.intervals) // STEP_HOURS)
+        # `init_hours` restricts which synoptic hours may START a sample. It
+        # exists for radiosondes: launches are 00/12Z, so at 06/18Z the upper-air
+        # channels fill 0.07% of cells against 1.85% -- 24x sparser. A sample
+        # starting at 06Z has almost nothing observed at BOTH ends, and the
+        # residual target is zero wherever a cell is unpaired, so such samples
+        # overwhelmingly teach "predict no change". Measured on t500 over 2010,
+        # the share of loss mass sitting on a real observed increment:
+        #     6h step,  all init hours        3.9%
+        #     12h step, all init hours       35.2%
+        #     12h step, 00/12Z inits only    67.0%
+        # Leave as None for surface data, where all four hours are equally dense.
         self._starts = np.array(
             [i for i in range(len(self.files) - reach)
              if self.files[i] is not None
+             and (self.init_hours is None or self.times[i].hour in self.init_hours)
              and all(self.files[i + k] is not None for k in range(1, reach + 1))],
             dtype=np.int64,
         )
@@ -244,7 +267,21 @@ class ERA5ObsDataset(ERA5Dataset):
         # residual autoregression those values feed straight back in as the next
         # input. A small floor buys spatial coherence off-network: at 0.02 about
         # 14% of the loss mass lands on unobserved cells. Set 0.0 to ablate.
-        w = np.maximum(w, self.weight_floor)
+        #
+        # An ABSOLUTE floor only behaves that way at surface density. Radiosonde
+        # channels fill ~0.97% of cells against 2t's 11.7%, so the same 0.02
+        # floor puts **67% of their loss mass on cells that are never observed**
+        # -- the model would mostly be trained to reproduce its own imputed
+        # climatology. With `relative_floor` the floor is a fraction of each
+        # channel's own mean frequency, which reproduces the surface behaviour
+        # (0.02 / 0.1167 = 0.171 -> 87% of mass on observed cells) and carries it
+        # to any density. Measured per channel, floor -> mass-on-observed:
+        #   t500   absolute 0.02 -> 33.4%,  relative 0.171 -> 87.3%
+        if self.relative_floor:
+            fl = self.weight_floor * w.mean(axis=(1, 2), keepdims=True)
+        else:
+            fl = self.weight_floor
+        w = np.maximum(w, fl)
         t = torch.from_numpy(w)[None]                 # [1, C, H, W]
         # Normalize to mean 1 over observed area so the loss scale is comparable
         # to the dense-ERA5 case and the configured learning rate still applies.

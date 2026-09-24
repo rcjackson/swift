@@ -1,0 +1,84 @@
+# @package _global_
+# Swift-B (SCM) on 11 years of NNJA observations, **all 69 variables**, 12h step.
+#
+# The surface-only 11-year run is the baseline this has to beat on 2t/msl while
+# additionally predicting 65 upper-air channels. Differences from
+# obs-nnja-11y-swinv2-1.4-scm.yaml, and why:
+#
+# **12h step, 00/12Z inits.** Set in the data config; see its header for the
+# measurements. Short version: radiosondes launch at 00/12Z, so a 6h step puts
+# only 3.9% of upper-air loss mass on a real observed increment, against 67% at
+# 12h from 00/12Z. This is the single most consequential choice here.
+#
+# **Half the samples.** init_hours halves the index and the 12h reach trims a
+# little more, so an epoch is roughly half the surface run's 13.1 kimg. The
+# kimg-denominated schedules below are rescaled to preserve the same EPOCH
+# counts the surface run used -- the calibration trap that cost the pilot: every
+# schedule here is in kimg but behaves in epochs.
+#
+# **sigma_data is 0.135, not 0.31.** That 0.31 was measured on 4 surface channels
+# at ~11% fill. sigma_data is the real data scale in the SCM noise schedule, not
+# a free knob -- set it wrong and the training noise levels no longer straddle
+# the signal. With 65 more channels at ~0.97% fill, nearly every cell of nearly
+# every channel is an unpaired zero, and the realised std of the target tensor
+# drops to 0.135 (measured on 2010, 69 vars, 12h, 00/12Z inits -- a factor of
+# 2.3 below the surface value). Re-measure on the full 11 years once the stats
+# are rebuilt: work/nnja/measure_sigma_data.py --data obs-nnja-11y-69v-1.4
+#
+# **Variable weights need no override.** swift's own table already covers all 69
+# (pressure-level weights are level/sum(levels)), so the 65 upper-air channels
+# are weighted by pressure automatically and the surface entries are unchanged.
+defaults:
+  - /data: obs-nnja-11y-69v-1.4
+  - /model: swinv2
+  - /loss: scm
+  - /precond: pass
+  - /solver: scm
+  - override /loss/noise: loguniform
+  - override /optimizer: muon
+
+distill: null
+
+optimizer:
+  lr: 0.008
+
+loss:
+  # measured, not copied -- see header
+  sigma_data: 0.135
+  tangent_warmup_kimg: 340
+  noise:
+    sigma_max: 200
+
+precond:
+  sigma_data: 0.135
+
+solver:
+  sigma_max: 200
+
+model:
+  window_size: [16, 16]
+  shift_size: [8, 8]
+  patch_size: [2, 2]
+  depth: 6
+  dim: 384
+  heads: 6
+
+data:
+  batch_size: 48
+  data_workers: 4
+  val_local_batch_size: 4
+
+trainer:
+  # epoch-matched to the surface run: ~6.6 kimg/epoch here vs 13.1 there, so the
+  # kimg figures are halved to hold the same number of passes over the data.
+  total_kimg: 1699
+  ema_halflife_kimg: 57
+  lr_rampup_kimg: 227
+  lr_min_factor: 0.0001
+  lr_cosine_anneal: true
+  kimg_per_tick: 1
+  checkpoint_ticks: 10
+  val_ticks: 25
+  val_target_interval: 8
+
+experiment_name: obs-nnja-11y-69v-swinv2-1.4-scm

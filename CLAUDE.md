@@ -1617,8 +1617,122 @@ constraint or an explicit spatial prior, not a longer window.
 
 ### Report
 
-`work/nnja/report/swift-obs-training.pptx` -- 10 slides, figures in
+`work/nnja/report/swift-obs-training.pptx` -- 12 slides, figures in
 `report/fig/`. Regenerate with the scripts in that directory.
+
+## Upper air: preparing the 65 remaining channels
+
+The surface case reads clean, so the 65 upper-air channels (5 variables x 13
+levels, from `conv/adpupa` radiosondes) go in next. Grids for 2011-2020 are
+being built with the same `nnja_grid_pilot.py --datasets adpupa` that produced
+2010; nothing about the gridding changed. What *did* have to change is
+everything downstream, and each change came out of a measurement.
+
+### The delta schedule is the whole ballgame
+
+CLAUDE.md already flagged "when upper air is added, revisit the delta
+schedule". It matters far more than the note implied.
+
+Radiosondes launch at 00/12Z. Per-level fill by analysis hour (2010, t500):
+
+| hour | fill |
+| --- | --- |
+| 00Z | 1.899% |
+| 06Z | 0.078% |
+| 12Z | 1.851% |
+| 18Z | 0.067% |
+
+06/18Z are **24x sparser**. The residual target is defined only where a cell is
+observed at *both* ends of the step and is **zero elsewhere**, so a sample whose
+ends do not overlap teaches "predict no change". Mean paired cells per window
+for t500:
+
+| init hour | 6h | 12h | 24h |
+| --- | --- | --- | --- |
+| 00Z | 19 | 515 | 599 |
+| 06Z | 21 | 15 | 22 |
+| 12Z | 18 | 516 | 581 |
+| 18Z | 17 | 15 | 18 |
+
+Translated into the quantity that actually matters -- the share of loss mass
+sitting on a **real** observed increment rather than an artificial zero:
+
+| configuration | loss mass on a real increment |
+| --- | --- |
+| 6h, all init hours | **3.9%** |
+| 12h, all init hours | 35.2% |
+| 12h, 00/12Z inits only | **67.0%** |
+| 24h, 00/12Z inits only | 71.7% |
+| [12,24], 00/12Z inits only | 69.4% |
+
+At the surface-run's 6h step the upper-air channels would have been 96%
+trained on "no change". **12h with 00/12Z inits is a 17x improvement**, and it
+is the shortest step that returns to the same synoptic hour. 24h buys only 4.7
+points more for twice the lead time, and 6h remains right for surface, where all
+four hours are equally dense -- so this is an upper-air-specific choice, not a
+project-wide one.
+
+### Three code changes, all defaulted off
+
+1. **`_build_index` source-coverage bug (real, latent).** The index kept a
+   window if *any* source file existed (`entry or None`), but `_load_window`
+   does `handles[self.var_source[v]]` unconditionally. 13,980 of 16,052 windows
+   have `adpsfc` but no `adpupa`, so the first upper-air batch would have died
+   with `KeyError: 'adpupa'` partway through an epoch. Now the index requires
+   every source that actually supplies a requested variable. Verified inert for
+   surface-only: train/val/test still 13118/1458/1449, identical pre- and
+   post-patch.
+
+2. **`relative_floor` (new, default `False`).** `weight_floor` puts a floor
+   under the off-network loss weight so the model stays spatially coherent where
+   it is never scored. An *absolute* 0.02 only behaves sensibly at surface
+   density. Share of each channel's loss mass landing on observed cells:
+
+   | channel | fill | floor 0.02 | floor as 0.171 x mean fill |
+   | --- | --- | --- | --- |
+   | 2m_temperature | 11.67% | 87.3% | 87.4% |
+   | temperature_500 | 0.97% | **33.4%** | 87.3% |
+   | specific_humidity_850 | 0.93% | 32.3% | 87.4% |
+
+   With the absolute floor two thirds of upper-air gradient would train the
+   model to reproduce its own imputed climatology. Expressed as a fraction of
+   each channel's own mean frequency, 0.171 (= 0.02 / 0.1167, the
+   surface-equivalent value) reproduces surface behaviour at any density.
+
+3. **`init_hours` (new, default `None`).** Restricts which synoptic hours may
+   *start* a sample. Needed to realise the 67% above; meaningless for surface.
+
+### sigma_data must be re-measured, not copied
+
+`sigma_data` is the real scale of the target in the SCM noise schedule. The
+surface run uses **0.31**. Measured on the 69-variable/12h/00-12Z target
+(2010): **0.135** -- a factor of 2.3 lower, because nearly every cell of nearly
+every one of the 65 new channels is an unpaired zero. Copying 0.31 forward would
+have put the training noise levels well off the signal. `work/nnja/measure_sigma_data.py`
+does this mechanically; re-run it on the full 11 years once stats are rebuilt.
+
+### New files
+
+| file | purpose |
+| --- | --- |
+| `configs/data/obs-nnja-11y-69v-1.4.yaml` | all 69 variables, 12h, 00/12Z inits, relative floor |
+| `configs/experiment/obs-nnja-11y-69v-swinv2-1.4-scm.yaml` | epoch-matched schedules (half the samples -> half the kimg) |
+| `work/nnja/measure_sigma_data.py` | measures `sigma_data` from the assembled target |
+
+### Still to do before launching
+
+1. Finish the `adpupa` 2011-2020 build (~2 h, ~9.6 GB).
+2. `make_splits.py --out swift_root_11y --sources adpsfc,adpupa`.
+3. `make_norm_stats.py --root swift_root_11y --intervals 6,12,24` for all 69 --
+   `normalize_diff_std_12.npz` does not exist yet, and the 12h step needs it.
+4. Re-run `measure_sigma_data.py` on the full period and update the config.
+5. TOA needs **no** rebuild: it lives in `adpsfc`, which the 69-variable config
+   requires in every window anyway. (Checked, because this exact class of
+   omission cost two jobs on 2026-09-23.)
+
+**Expect a smaller train split.** Windows with only `adpsfc` are now correctly
+dropped, so the 69-variable run sees fewer samples than the surface run. That is
+the fix working, not data loss.
 
 ## Still open
 
@@ -1727,3 +1841,14 @@ Live items for the **current path**:
 - [-] ATMS 2010+ — dropped with radiances
 - [ ] Recompute normalization statistics over observed cells
 - [ ] Full-period builds + train/val/test split
+- [x] **Upper air prepared for Swift**: fixed the `_build_index` source-coverage
+      bug (a surface-only window raised `KeyError: 'adpupa'` on the first
+      upper-air batch), added `relative_floor` and `init_hours` to
+      `ERA5ObsDataset` (both default-off, surface behaviour bit-identical),
+      measured the delta schedule (6h puts **96% of upper-air loss mass on an
+      artificial zero**; 12h + 00/12Z inits -> 67%), re-measured `sigma_data`
+      (0.135, not the surface run's 0.31), and wrote the 69-variable data and
+      experiment configs
+- [ ] Finish the adpupa 2011-2020 build, then rebuild splits (`--sources
+      adpsfc,adpupa`) and norm stats (`--intervals 6,12,24`), and re-measure
+      `sigma_data` over the full period

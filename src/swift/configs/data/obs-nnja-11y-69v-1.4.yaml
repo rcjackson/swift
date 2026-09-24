@@ -1,0 +1,132 @@
+# @package data
+# NNJA gridded observations, 2010-2020, **all 69 Swift variables**.
+#
+# Extends obs-nnja-11y-1.4.yaml (4 surface channels) with the 65 upper-air
+# channels from `conv/adpupa` radiosondes: 5 variables x 13 pressure levels.
+# 600 hPa is not a WMO mandatory level and is absent from the NNJA schema, so it
+# is interpolated in log(p) from 700/500 at grid-build time; `q` is derived from
+# the reported dewpoint via Bolton (1980). See work/nnja/nnja_grid_pilot.py.
+#
+# Three things differ from the surface config, and each is a measurement, not a
+# preference. All figures are for temperature_500 over 2010 unless stated.
+#
+# 1. **intervals: [12], not [6].** Radiosondes launch at 00/12Z. At 06/18Z the
+#    upper-air channels fill 0.07% of cells against 1.85% -- 24x sparser. The
+#    residual target is defined only where a cell is observed at BOTH ends, and
+#    is zero elsewhere, so at a 6h step the model is overwhelmingly taught
+#    "predict no change". Share of loss mass sitting on a REAL increment:
+#        6h,  all init hours       3.9%
+#        12h, all init hours      35.2%
+#        12h, 00/12Z inits only   67.0%
+#        24h, 00/12Z inits only   71.7%
+#    12h is the shortest step that keeps the same synoptic hour, so it is the
+#    reanalysis-relevant choice; 24h buys only 4.7 points more for twice the
+#    lead time. Paired cells per window: 19 at 6h, 515 at 12h.
+#
+# 2. **init_hours: [0, 12].** Without it, half the samples start at 06/18Z and
+#    contribute ~15 paired cells each (vs ~515). They are not merely useless --
+#    they actively dilute the gradient with all-zero targets.
+#
+# 3. **relative_floor: true.** The off-network weight floor has to scale with a
+#    channel's own coverage. An absolute 0.02 on a 0.97%-fill channel puts 67%
+#    of its loss mass on never-observed cells; expressed as a fraction of each
+#    channel's mean frequency, 0.171 reproduces the surface behaviour (87% of
+#    mass on observed cells) at every density. 0.02/0.1167 = 0.171 is exactly
+#    the surface-equivalent value, so surface channels are unaffected.
+#
+# Coverage caveat: `conv/adpupa` begins 2010-01-01, the same as adpsfc, so the
+# date range is unchanged. But the upper-air windows are a SUBSET -- a window
+# with only adpsfc present is dropped from the index once an upper-air variable
+# is requested (see ERA5ObsDataset._build_index). Expect a smaller train split
+# than the surface-only run; that is correct, not a bug.
+#
+# Stats must be rebuilt for all 69 variables AND for the 12h interval:
+#   python work/nnja/make_norm_stats.py --root <root> --intervals 6,12,24
+# normalize_diff_std_12.npz does not exist yet in swift_root_11y.
+defaults:
+  - defaults
+
+batch_size: 48
+data_workers: 4
+val_local_batch_size: 4
+
+dataset:
+  _target_: swift.data.era5_obs.ERA5ObsDataset
+  root: /lus/flare/projects/Swift-Reanalysis/work/nnja/swift_root_11y
+  intervals: [12]
+  init_hours: [0, 12]
+  min_count: 1
+  relative_floor: true
+  weight_floor: 0.171
+  variables:
+    - 2m_temperature
+    - 10m_u_component_of_wind
+    - 10m_v_component_of_wind
+    - mean_sea_level_pressure
+    - geopotential_50
+    - geopotential_100
+    - geopotential_150
+    - geopotential_200
+    - geopotential_250
+    - geopotential_300
+    - geopotential_400
+    - geopotential_500
+    - geopotential_600
+    - geopotential_700
+    - geopotential_850
+    - geopotential_925
+    - geopotential_1000
+    - temperature_50
+    - temperature_100
+    - temperature_150
+    - temperature_200
+    - temperature_250
+    - temperature_300
+    - temperature_400
+    - temperature_500
+    - temperature_600
+    - temperature_700
+    - temperature_850
+    - temperature_925
+    - temperature_1000
+    - u_component_of_wind_50
+    - u_component_of_wind_100
+    - u_component_of_wind_150
+    - u_component_of_wind_200
+    - u_component_of_wind_250
+    - u_component_of_wind_300
+    - u_component_of_wind_400
+    - u_component_of_wind_500
+    - u_component_of_wind_600
+    - u_component_of_wind_700
+    - u_component_of_wind_850
+    - u_component_of_wind_925
+    - u_component_of_wind_1000
+    - v_component_of_wind_50
+    - v_component_of_wind_100
+    - v_component_of_wind_150
+    - v_component_of_wind_200
+    - v_component_of_wind_250
+    - v_component_of_wind_300
+    - v_component_of_wind_400
+    - v_component_of_wind_500
+    - v_component_of_wind_600
+    - v_component_of_wind_700
+    - v_component_of_wind_850
+    - v_component_of_wind_925
+    - v_component_of_wind_1000
+    - specific_humidity_50
+    - specific_humidity_100
+    - specific_humidity_150
+    - specific_humidity_200
+    - specific_humidity_250
+    - specific_humidity_300
+    - specific_humidity_400
+    - specific_humidity_500
+    - specific_humidity_600
+    - specific_humidity_700
+    - specific_humidity_850
+    - specific_humidity_925
+    - specific_humidity_1000
+  forcings:
+    - toa_incident_solar_radiation
