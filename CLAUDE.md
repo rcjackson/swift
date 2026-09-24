@@ -1783,6 +1783,30 @@ iteration timing (0.390 s/iter, of which data is 0.2%):
 
 7 is also `OMP_NUM_THREADS`, the per-rank core budget in the launch script.
 
+### eval_masked's diurnal baseline was silently unavailable at 12h
+
+The scoring path needed a fix too. `build_diurnal_climatology` hardcoded
+`intervals=[6]` and read `pos + 1`, while the caller was free to pass
+`--delta 12`. The transition keys it learns are therefore
+`(0,6), (6,12), (12,18), (18,0)` -- and a 12h run asks for `(0,12)` and
+`(12,0)`, **neither of which exists**.
+
+The lookup is `clim[v].get(key)`, so every window missed and the `+diurnal`
+column printed `--`. Visible rather than silently wrong, which is the better
+failure, but it removes the only baseline that matters: persistence alone is
+too weak a bar, and at 12h it is weaker still. `delta` and `init_hours` are now
+threaded through, and `--init-hours 0,12` is required when scoring an upper-air
+checkpoint so the baseline sees the same windows the model did.
+
+Verified: at the 6h default the surface numbers are unchanged (2t persistence
+4.300, +diurnal 2.768 on a 100-window sample); at 12h/00-12Z the baseline now
+populates (2t 5.471 -> 3.619, t500 2.737 -> 2.713).
+
+That t500 pair is worth noting in itself. The diurnal baseline buys almost
+nothing at 500 hPa (0.9%) against 34% for 2t -- as expected, since there is
+little diurnal cycle in the free troposphere. **For upper air, persistence is
+the bar**, and it is a harder one.
+
 ### New files
 
 | file | purpose |
