@@ -1964,3 +1964,50 @@ Live items for the **current path**:
 - [ ] Finish the adpupa 2011-2020 build, then rebuild splits (`--sources
       adpsfc,adpupa`) and norm stats (`--intervals 6,12,24`), and re-measure
       `sigma_data` over the full period
+
+
+## adpupa window gaps (resolved, 2026-09-24)
+
+The upper-air build wrote **16,043 of 16,072** nominal windows for 2010-2020
+(30 missing, 0.19%). These are **upstream NNJA sparsity, not build failures** --
+verified by reading `conv/adpupa/NC002001` directly for every gap date.
+
+`nnja_grid_pilot.py` selects observations in `(anal-3h, anal+3h]` and does
+`if not sel.any(): continue`, writing no file when a window has no obs. On the
+gap days the upstream parquet only covers a few hours, and the predicted gap set
+matches the observed one exactly on every date checked:
+
+| day          | hours upstream          | windows with no obs |
+|--------------|-------------------------|---------------------|
+| 2011-06-13   | 21,22,23                | 00/06/12Z           |
+| 2015-07-28   | 21,22,23                | 00/06/12Z           |
+| 2017-11-30   | 21,22,23                | 00/06/12Z           |
+| 2015-11-11   | 0,1,16,17,18,21-23      | 06Z, 12Z            |
+| 2016-03-19   | ...,14,22,23            | 18Z                 |
+| 2020-03-07   | 22,23                   | all four            |
+
+Control days (2011-06-12, 2011-06-14, 2015-07-27, 2017-11-27, 2020-03-06) all
+carry 20-24 h of coverage and built completely.
+
+Why the build log said `err=0`: the `ok/skip/absent/err` counters are **per-day,
+not per-window**, so a day succeeds while one of its four windows writes nothing.
+`ok=3653` days is consistent with 30 missing windows.
+
+Distribution: by hour 00Z x8, 06Z x10, 12Z x7, 18Z x5; by year 2020 x12,
+2015 x5, 2017 x5, 2011 x4, 2012 x2, 2013 x1, 2016 x1.
+
+Only 15 fall on 00/12Z, the init hours the 69v config uses. The source-coverage
+fix in `_build_index` (entry kept only if `needed <= entry.keys()`) drops these
+windows and any 12 h pair reaching into them, so they cost ~30 training starts
+out of ~13k -- negligible, and **no `KeyError: 'adpupa'` mid-epoch**, which is
+what would have happened without the fix.
+
+### Build teardown hang
+`nnja_grid_pilot.py` printed `DONE` and flushed every file, then hung in
+`futex_wait_queue` with 152 threads -- gcsfs's prefetcher does not shut down
+cleanly (`NotImplementedError: Calling sync() from within a running loop` from
+`AbstractBufferedFile.__del__`). The data was complete: no `.tmp` files, no open
+write fds, last three files verified readable with the right diurnal signature
+(1.57% / 0.03% / 1.50% finite at 00/06/12Z). A `kill -TERM` cleared it.
+**Any script that waits on a gcsfs-using build pid must expect this** -- the
+pid outliving its own work is normal here, not a sign of unfinished output.
