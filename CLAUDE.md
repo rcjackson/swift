@@ -1722,6 +1722,24 @@ unpaired zero. Per channel it spans 0.02 (`specific_humidity_100`) to 0.33 (the
 off the signal. `work/nnja/measure_sigma_data.py` does this mechanically; re-run
 it on the full 11 years once stats are rebuilt.
 
+### The variable weights dilute the surface channels 4.8x
+
+`_calculate_variable_weights` does cover all 69 (checked -- pressure weights are
+`level/sum(levels)`, sum exactly 1.0), so nothing has to be added. But it
+normalises to sum 1, so adding 65 channels rescales the 4 that already existed:
+
+| variable | surface-only run | 69-variable run |
+| --- | --- | --- |
+| 2m_temperature | 76.9% | 15.9% |
+| each wind / msl | 7.7% | 1.59% |
+| all 65 upper-air | -- | 79.4% |
+
+The 69-variable run has to beat the surface run **on 2t and msl** while giving
+2t 4.8x less gradient. Left at the default deliberately -- the point is a
+69-variable reanalysis, not a surface run with passengers -- but if the surface
+metrics regress, check this before blaming the 12h step or the new channels. It
+is a one-line `loss.var_weights` override to test.
+
 ### New files
 
 | file | purpose |
