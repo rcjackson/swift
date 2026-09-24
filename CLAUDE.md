@@ -1740,6 +1740,49 @@ The 69-variable run has to beat the surface run **on 2t and msl** while giving
 metrics regress, check this before blaming the 12h step or the new channels. It
 is a one-line `loss.var_weights` override to test.
 
+### 10 nodes on debug-scaling, and the batch/step trap it creates
+
+The full Swift was trained on **10 `debug-scaling` nodes**, not the 1 `debug`
+node the surface runs used. `debug-scaling` allows 1-256 nodes at the same 1 h
+cap and the same one-running/one-queued limit -- so a 10-node job competes with
+the surface chain for that single slot, but the chain logic needs no change.
+
+Moving there re-exposes the kimg/epoch trap in a new form.
+`scripts/aurora-obs.sh` sets `BATCH_SIZE = num_gpus * LOCAL_BATCH_SIZE`, so the
+node count multiplies into the global batch -- and `total_kimg` counts
+**images**. More nodes at fixed kimg buys *fewer* optimizer steps:
+
+| nodes | local batch | global batch | steps @1699 kimg | vs surface baseline (70,083) |
+| --- | --- | --- | --- | --- |
+| 1 | 4 | 48 | 35,396 | 0.5x |
+| 10 | 4 | 480 | 3,540 | **0.05x** |
+| 10 | 1 | 120 | 14,158 | 0.2x |
+
+Ten nodes at the obvious `LOCAL_BATCH_SIZE=4` would have run **20x
+undertrained** while appearing to complete its schedule. Settled on
+`LOCAL_BATCH_SIZE=1` (global batch 120) with `total_kimg` 1699 -> 3400: 28,333
+steps, 518 epochs, ~0.8 h. Matching 70k steps exactly needs 8410 kimg = 1281
+epochs, past where 11 years teaches anything -- the surface curve was flat long
+before its 3364. `lr` 0.008 -> 0.0126 (sqrt scaling for the 2.5x batch; linear
+would say 0.02 but this project diverged once at high lr).
+
+`scripts/aurora-obs-scaling.sh` is the submission script; it differs from
+`aurora-obs.sh` only in select/queue/name.
+
+### data_workers must go to 7
+
+A 69-variable sample is **18.2 MB and 410 ms cold** to assemble, against 1.2 MB
+and 29 ms for a surface sample -- 14x. Measured against the surface run's real
+iteration timing (0.390 s/iter, of which data is 0.2%):
+
+| data_workers | data per local-batch-4 iteration | verdict |
+| --- | --- | --- |
+| 4 | 0.41 s | **data-bound** (compute is 0.39 s) |
+| 7 | 0.23 s | ok |
+| 12 | 0.14 s | ok |
+
+7 is also `OMP_NUM_THREADS`, the per-rank core budget in the launch script.
+
 ### New files
 
 | file | purpose |
@@ -1747,6 +1790,8 @@ is a one-line `loss.var_weights` override to test.
 | `configs/data/obs-nnja-11y-69v-1.4.yaml` | all 69 variables, 12h, 00/12Z inits, relative floor |
 | `configs/experiment/obs-nnja-11y-69v-swinv2-1.4-scm.yaml` | epoch-matched schedules (half the samples -> half the kimg) |
 | `work/nnja/measure_sigma_data.py` | measures `sigma_data` from the assembled target |
+| `scripts/aurora-obs-scaling.sh` | 10 nodes on `debug-scaling` |
+| `work/nnja/finish_upperair.sh` | splits + stats + sigma_data, unattended |
 
 ### Still to do before launching
 
