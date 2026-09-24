@@ -1476,6 +1476,93 @@ rather than re-tuning.
 - `debug` is the only usable queue (prod/small/medium need >=256 nodes), 1h cap,
   ONE queued job per user.
 
+## FINAL RESULT (2026-09-24): Swift learns from observations
+
+Full 11-year run complete: **3,364 kimg, 256 epochs over 13,134 windows**,
+matching the paper's 259 epochs. Scored on the 2020 held-out year, 1,449
+windows, observed cells only, latitude-weighted.
+
+| variable | Swift | persistence | diurnal clim | vs bar |
+| --- | --- | --- | --- | --- |
+| `2m_temperature` | **2.320 K** | 4.694 | 2.514 | **-7.7%** |
+| `mean_sea_level_pressure` | **280.6 Pa** | 346.6 | 358.6 | **-21.8%** |
+| `10m_u_component_of_wind` | 1.923 m/s | 2.009 | 1.883 | +2.1% |
+| `10m_v_component_of_wind` | 1.989 m/s | 2.043 | 1.963 | +1.3% |
+
+**Every variable now beats persistence**, including wind, which did not at
+846 kimg. 2t and msl clear the diurnal-climatology bar -- a lookup table that
+knows only the analysis hour. Collapse diagnostic healthy (ratio 0.36-0.44).
+
+Wind trails the bar by 1-2%, down from 6% at 846 kimg.
+`_calculate_variable_weights` gives 10u/10v **0.1** against 2t's 1.0, so the
+loss barely optimises them. Raising that is the obvious next test.
+
+### Budget: more data AND more training both mattered
+
+| vs diurnal bar | 1 yr, 433 kimg | 11 yr, 846 | 11 yr, 3364 |
+| --- | --- | --- | --- |
+| 2t | -8.1% | -2.7% | **-7.7%** |
+| msl | -16.6% | -24.3% | -21.8% |
+| 10u | +8.4% | +6.2% | **+2.1%** |
+| 10v | +7.8% | +5.7% | **+1.3%** |
+
+Absolute accuracy improved with data (2t 2.617 -> 2.320 K) but **relative skill
+over the lookup table did not** -- roughly -8% both times. The extra data bought
+accuracy, not more skill over climatology. Wind is where the full budget clearly
+paid: its deficit more than halved.
+
+### ERA5 comparison: competitive at stations, broken off-network
+
+WeatherBench2 ERA5 regridded to our grid (`work/nnja/fetch_era5_ref.py`,
+`era5_ref/`, 2020, 1,464 windows).
+
+**Against the same station observations:**
+
+| variable | Swift | ERA5 |
+| --- | --- | --- |
+| `2m_temperature` | 3.799 K | **2.937 K** |
+| `10m_u_component_of_wind` | **1.971 m/s** | 2.152 |
+| `10m_v_component_of_wind` | **2.033 m/s** | 2.156 |
+| `mean_sea_level_pressure` | 363.8 Pa | **358.1 Pa** |
+
+The model **beats ERA5 on both wind components** and is within 2% on pressure,
+having never seen a reanalysis. ERA5 assimilates many of these same stations, so
+it is a strong reference rather than an independent one.
+
+Note 3.799 K here vs 2.320 K in the table above: **different cell sets, both
+correct.** `eval_masked` scores where a station reported at *both* t and t+6h;
+`eval_vs_era5` scores wherever one reported at t+6h, including ~4% of cells with
+no input observation at all -- cold starts, which are much harder. Use the
+first for baseline comparisons (the baselines also need an input); the second is
+the honest "everywhere a station reported" number.
+
+**Model vs ERA5, by region (2t):**
+
+```
+all cells        14.6 K
+unobserved       15.5 K
+off-network      15.6 K   (cells never observed in the whole test split)
+```
+
+**This is the main open problem.** A 15 K disagreement where nothing is observed
+means the model is not producing a credible field there. ERA5 is physically
+constrained by a forecast model in data voids; ours has only the climatological
+mean plus whatever it can propagate from distant stations. This is GraphDOP's
+documented failure mode (arXiv:2412.15687: predictions "become more zonal and
+featureless" away from observations).
+
+ERA5 is a reference, not truth -- it is extrapolating in those regions too. But
+at 15 K the disagreement is too large to attribute to reference error.
+
+**The observation-only metric could never have shown this.** It only scores the
+11% of cells with observations. Adding the ERA5 comparison was the user's
+suggestion and it found the one thing that most limits the result.
+
+### Report
+
+`work/nnja/report/swift-obs-training.pptx` -- 10 slides, figures in
+`report/fig/`. Regenerate with the scripts in that directory.
+
 ## Still open
 
 Items 1-6 belong to the **AIFS-DOP path**; they only matter if that pipeline is
