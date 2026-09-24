@@ -40,9 +40,11 @@
 # is requested (see ERA5ObsDataset._build_index). Expect a smaller train split
 # than the surface-only run; that is correct, not a bug.
 #
-# Stats must be rebuilt for all 69 variables AND for the 12h interval:
-#   python work/nnja/make_norm_stats.py --root <root> --intervals 6,12,24
-# normalize_diff_std_12.npz does not exist yet in swift_root_11y.
+# **Separate root: swift_root_69v, not swift_root_11y.** The two trees link the
+# same grid files; the difference is that 69v links `adpupa` as well and carries
+# its own normalization. Stats are rewritten in place by make_norm_stats.py, and
+# swift_root_11y is read by the running surface jobs, so they cannot share.
+#   ./work/nnja/finish_upperair.sh        # splits + stats + sigma_data
 defaults:
   - defaults
 
@@ -52,7 +54,7 @@ val_local_batch_size: 4
 
 dataset:
   _target_: swift.data.era5_obs.ERA5ObsDataset
-  root: /lus/flare/projects/Swift-Reanalysis/work/nnja/swift_root_11y
+  root: /lus/flare/projects/Swift-Reanalysis/work/nnja/swift_root_69v
   intervals: [12]
   init_hours: [0, 12]
   min_count: 1
