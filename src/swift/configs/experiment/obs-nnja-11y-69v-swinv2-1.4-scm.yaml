@@ -75,6 +75,18 @@ precond:
 
 solver:
   sigma_max: 200
+  # MUST match the data interval. swift's own solver/scm.yaml documents the
+  # convention -- 6h (0.6), 12h (1.2), 24h (2.4) -- and defaults to 0.6, which
+  # is right for the 6h surface runs and WRONG here.
+  #
+  # This is not cosmetic. Training reads delta from the dataloader (1.2, from
+  # intervals: [12]), but RMSE_rollout calls `sampler(X, generator=rng)` with
+  # no auxiliary, and sampler_factory's closure discards **kwargs and passes
+  # only solver_kwargs -- so validation would condition the model on "predict
+  # 6 hours" while scoring against a 12-hour target. The loss curve would look
+  # fine and every val/rmse number would be wrong, which is the worst way for
+  # a run to fail.
+  auxiliary: 1.2
 
 model:
   window_size: [16, 16]
