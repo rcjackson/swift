@@ -253,6 +253,15 @@ def main(cfg: DictConfig):
         }
         if "residual" in cfg.data.dataset:
             val_cfg.update({"residual": cfg.data.dataset.residual})
+        # Anything that changes what a "step" MEANS has to reach validation too,
+        # or the val dataset silently reverts to the 6h default while the model
+        # steps 12h. `intervals` also keys `t_stds`, so `unstandardize_t` would
+        # raise KeyError(6) on a 12h run -- and before that, the rollout offsets
+        # would be built on the wrong step length.
+        for _k in ("intervals", "init_hours", "min_count",
+                   "weight_floor", "relative_floor"):
+            if _k in cfg.data.dataset:
+                val_cfg[_k] = cfg.data.dataset[_k]
 
         val_dataset: Dataset = instantiate(
             DictConfig(val_cfg),

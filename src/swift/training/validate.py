@@ -40,6 +40,12 @@ def RMSE_rollout(
     aggregate_rmse_loss = 0  # sum of 14 day loss aggregating channels
 
     residual = dataset.residual
+    # `unstandardize_t` keys t_stds by delta and DEFAULTS TO 6. On a 12h run the
+    # residual scale differs by ~1.4x on average (up to 3.9x per channel), so
+    # taking the default would rescale every prediction by the wrong factor --
+    # and once the val dataset carries intervals: [12], t_stds has no key 6 and
+    # it raises instead. Ask the dataset what its step actually is.
+    delta = int(min(getattr(dataset, "intervals", [6])))
     arr_separate_rmse_loss = np.zeros(
         [
             dataset.n_target_channels,
@@ -73,7 +79,8 @@ def RMSE_rollout(
                         dataset.standardize_x(
                             torch.stack(
                                 [dataset.get_forcings(j + i) for j in idx], dim=0
-                            ).to(device)
+                            ).to(device),
+                            delta,
                         ),
                     ],
                     dim=1,
@@ -84,10 +91,12 @@ def RMSE_rollout(
                 # compute rmse every new day
                 if (i + 1) % num_interval_per_day == 0 or i == 0:
                     nth_day = (i + 1) // num_interval_per_day
-                    Y_un = dataset.unstandardize_t(Y)
+                    Y_un = dataset.unstandardize_t(Y, delta)
                     if residual:  # add in real space, remove forcings
                         Y_un = (
-                            dataset.unstandardize_x(X)[:, : len(dataset.variables)]
+                            dataset.unstandardize_x(X, delta)[
+                                :, : len(dataset.variables)
+                            ]
                             + Y_un
                         )
                     # targets are NOT standardized or residual (ERA5RollOutDataset)
@@ -135,10 +144,10 @@ def RMSE_rollout(
                         )
 
                 if residual:  # convert in real space
-                    X = dataset.unstandardize_x(X)[
+                    X = dataset.unstandardize_x(X, delta)[
                         :, : len(dataset.variables)
-                    ] + dataset.unstandardize_t(Y)
-                    X = dataset.standardize_x(X)
+                    ] + dataset.unstandardize_t(Y, delta)
+                    X = dataset.standardize_x(X, delta)
                 else:
                     X = Y
 

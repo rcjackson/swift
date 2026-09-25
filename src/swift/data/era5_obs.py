@@ -29,6 +29,7 @@ train/val/test by `work/nnja/make_splits.py`; statistics come from
 """
 
 import os
+import warnings
 from datetime import datetime, timedelta, timezone
 from glob import glob
 from typing import Tuple
@@ -385,18 +386,57 @@ class ERA5ObsRollOutDataset(ERA5ObsDataset):
         self.interval = interval
         per_day = 24 // STEP_HOURS
         assert self.interval >= per_day, "cannot even predict one day"
+
+        # The MODEL steps by the data interval, not by STEP_HOURS. `RMSE_rollout`
+        # scores after step counts 1, `per_day` and `interval` (its `i == 0` and
+        # `(i+1) % per_day == 0` branches), so the targets must be the state
+        # after that many MODEL steps -- which is that many * `step_frames`
+        # frames on the 6-hourly file timeline.
+        #
+        # This was hardcoded to 6h frames, and at a 12h interval it silently
+        # halved every lead time: the model's 12/48/96h forecasts were scored
+        # against 6/24/48h targets. Nothing raises -- you get plausible-looking
+        # numbers that are wrong, and the tell is only visible as error
+        # DECREASING with lead time (z500 read 2040 at column 0, 853 at
+        # column 1, which no forecast does). For the 6h surface runs
+        # step_frames is 1 and the arithmetic is unchanged, which is why this
+        # survived until upper air forced a 12h step.
+        self.step_hours = int(min(self.intervals))
+        step_frames = self.step_hours // STEP_HOURS
+
+        # `RMSE_rollout` advances the forcing with `get_forcings(j + i)`, i.e. by
+        # i *start positions*, while the model advances i * step_hours. Those
+        # agree only when consecutive starts are one model step apart -- true for
+        # 6h/all-hours (surface) and for 12h/[0,12] (upper air), but NOT for e.g.
+        # 12h with init_hours=None, which would feed a 6h-stale solar field.
+        if len(self._starts) > 1:
+            gaps = np.unique(np.diff(self._starts))
+            if not (gaps.size == 1 and gaps[0] == step_frames):
+                warnings.warn(
+                    f"rollout forcings assume consecutive starts are one "
+                    f"{self.step_hours}h step ({step_frames} frames) apart, but "
+                    f"observed gaps are {gaps.tolist()} frames; the solar "
+                    f"forcing will drift during rollout validation.",
+                    RuntimeWarning,
+                )
+        self._offsets = [
+            k * step_frames
+            for k in ([1] + list(range(per_day, self.interval + 1, per_day)))
+        ]
+        reach = max(self._offsets)
+
         # Only starts with the whole rollout horizon present are usable.
         self._starts = np.array(
             [p for p in self._starts
-             if p + self.interval < len(self.files)
-             and all(self.files[p + k] is not None
-                     for k in range(1, self.interval + 1))],
+             if p + reach < len(self.files)
+             and all(self.files[p + k] is not None for k in range(1, reach + 1))],
             dtype=np.int64,
         )
         if self._starts.size == 0:
             raise ValueError(
-                f"no window has {self.interval} consecutive frames in split "
-                f"'{self.split}'"
+                f"no window has {reach} consecutive frames in split "
+                f"'{self.split}' (interval={self.interval} steps of "
+                f"{self.step_hours}h)"
             )
 
     def __getitem__(self, idx: int):
@@ -406,10 +446,8 @@ class ERA5ObsRollOutDataset(ERA5ObsDataset):
         xr, xm = self._load_window(pos, self.variables)
         x = torch.from_numpy(self._standardize_and_impute(xr, xm))
 
-        per_day = 24 // STEP_HOURS
-        offs = [1] + list(range(per_day, self.interval + 1, per_day))
         ts = []
-        for k in offs:
+        for k in self._offsets:
             raw, m = self._load_window(pos + k, self.variables)
             # Unstandardized, and unobserved cells are NaN -- the evaluation is
             # masked, so a filled value would quietly enter the metric.
