@@ -71,13 +71,39 @@ echo "Job started at: $(date '+%Y-%m-%d-%H%M%S')"
 # default library path, and without it `import h5py` fails at import time --
 # i.e. the job dies before it reads a single window.
 # Note swift_env (anemoi, pyarrow) has no torch and is NOT used for training.
-module load frameworks hdf5/1.14.6
+#
+# ALL THREE VERSIONS ARE PINNED, and oneapi is the one that is easy to miss.
+# On 2026-09-29 the Aurora default rolled 26.26.0 -> 26.181.0 (frameworks
+# 2025.3.1 -> 2026.1.0, oneapi 2025.3.1 -> 2026.1.0) and job 8878917 died at
+# startup with:
+#
+#   OSError: libmkl_intel_lp64.so.2: cannot open shared object file
+#
+# `swift/venv` layers over frameworks 2025.3.1 via --system-site-packages, so
+# torch still resolves out of /opt/aurora/26.26.0/... -- but that torch links
+# libmkl_intel_lp64.so.2 (oneAPI 2025.3) and the new default ships .so.3 only.
+# Pinning `frameworks` ALONE DOES NOT FIX THIS: the oneapi module is what puts
+# MKL on LD_LIBRARY_PATH, and it is loaded by the default environment before
+# this script runs, so it must be explicitly swapped back. Both 26.26.0 and
+# 26.181.0 remain under MODULEPATH, so the old versions are still loadable.
+#
+# If a version below is ever retired, REBUILD THE VENV against the new
+# frameworks rather than unpinning -- unpinning is what caused this outage.
+module load oneapi/release/2025.3.1
+module load frameworks/2025.3.1 hdf5/1.14.6
 
 # The venv layers swift + its deps over frameworks via --system-site-packages.
 source /lus/flare/projects/Swift-Reanalysis/swift/venv/bin/activate
 
 echo "python: $(which python3)"
+# Hard gate, not an echo: `import torch` is the exact thing the module drift
+# broke, and it is cheap to check before 10 nodes of walltime are committed.
 python3 -c "import torch, h5py; print('torch', torch.__version__, '| h5py', h5py.__version__)"
+if [ $? -ne 0 ]; then
+  echo "FATAL: torch/h5py import failed -- check the module pins above" >&2
+  module list
+  exit 1
+fi
 
 export http_proxy="http://proxy.alcf.anl.gov:3128"
 export https_proxy="http://proxy.alcf.anl.gov:3128"

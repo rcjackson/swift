@@ -43,7 +43,12 @@ echo "Job started at: $(date '+%Y-%m-%d-%H%M%S')"
 # default library path, and without it `import h5py` fails at import time --
 # i.e. the job dies before it reads a single window.
 # Note swift_env (anemoi, pyarrow) has no torch and is NOT used for training.
-module load frameworks hdf5/1.14.6
+# Pinned: the Aurora default rolled 26.26.0 -> 26.181.0 on 2026-09-29 and the
+# venv's torch (from frameworks 2025.3.1) links libmkl_intel_lp64.so.2, which
+# only the 2025.3.1 oneapi module puts on LD_LIBRARY_PATH. See
+# scripts/aurora-obs-scaling.sh for the full note.
+module load oneapi/release/2025.3.1
+module load frameworks/2025.3.1 hdf5/1.14.6
 
 # The venv layers swift + its deps over frameworks via --system-site-packages.
 source /lus/flare/projects/Swift-Reanalysis/swift/venv/bin/activate
