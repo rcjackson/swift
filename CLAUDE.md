@@ -2154,3 +2154,50 @@ Two general rules this implies:
 
 None of `scripts/*.sh` combine `set -u` with `module load`, so the qsub launch
 path is unaffected -- this was a driver-script bug only.
+
+### Nominal loss weights are not the gradient: `w_obs` dominates them
+
+The 69-variable config's header predicted that the surface metrics would
+regress because normalisation dilutes the 4 surface channels from 76.9% to
+20.6%, and named `loss.var_weights` as the one-line fix. That prediction was
+tested (`obs-nnja-11y-69v-surfw-swinv2-1.4-scm`, k=3.846, surface block
+20.6% -> 50.0%) and **it made things worse, in the direction opposite to the
+hypothesis**. At matched kimg 1728, all-cell validation:
+
+| var  | baseline | surfw  | ratio |
+|------|----------|--------|-------|
+| 2t   |   6.1432 | 7.4569 | 1.214 |
+| 10m u|   2.3189 | 2.7196 | 1.173 |
+| msl  | 437.5935 | 464.53 | 1.062 |
+| z500 | 2024.58  | 985.52 | 0.487 |
+| t850 |  10.6266 | 5.0561 | 0.476 |
+
+THE REASON, and it generalises to any reweighting on this data. In every loss
+class the weights multiply: `w_obs * w_var * w_lat`. `w_obs` confines the
+gradient to cells the observing network actually saw, and coverage is NOT
+uniform across variables -- surface is observed at ~11.6% of cells, upper air
+at ~0.9%, a 12x difference (`obs_freq.npz`). Folding coverage into the nominal
+share gives the gradient that actually lands on observed cells:
+
+|                  | nominal surface | effective-on-obs surface |
+|------------------|-----------------|--------------------------|
+| baseline (k=1)   |          20.6%  |                   76.2%  |
+| surfw (k=3.846)  |          50.0%  |                   92.5%  |
+
+So the surface block was never starved. It already held 76.2% of the real
+gradient -- close to the surface-only run's 76.9%, which is the number the
+header wanted to "restore" and which had in effect never been lost. Pushing it
+to 92.5% left the 65 upper-air channels 7.5% and overfit the sparse surface
+observing network, which all-cell validation then penalises.
+
+TWO TRAPS, both of which caught me here:
+- **Do not reason about `_calculate_variable_weights` shares in isolation on
+  sparse data.** Multiply by per-variable coverage first. The nominal table is
+  only the gradient when coverage is uniform, which is true for dense ERA5 and
+  false for NNJA.
+- **`val/tick 0` is NOT the initial model.** The rollout validation block runs
+  at the END of a tick (`trainer.py`, after the `cur_tick != 0` continue), so
+  the kimg-0 point is already post-treatment. Normalising two runs by their own
+  kimg-0 values to "cancel the seed" divides out part of the effect -- and the
+  seed is hardcoded 1234 for both runs anyway, so there is no seed difference
+  to cancel. Compare raw values at matched kimg.
