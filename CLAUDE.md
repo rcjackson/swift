@@ -1855,6 +1855,65 @@ nothing at 500 hPa (0.9%) against 34% for 2t -- as expected, since there is
 little diurnal cycle in the free troposphere. **For upper air, persistence is
 the bar**, and it is a harder one.
 
+### Scoring 69 variables needs TWO jobs, and the cost is all in the baseline
+
+Measured 2026-09-29, and it is not close. Fitting the diurnal climatology walks
+every train window loading 69 channels twice:
+
+| stage | cost |
+| --- | --- |
+| train index build | 82 s |
+| **diurnal climatology, 6545 windows @ 0.277 s** | **30.2 min** |
+| test index build + 714 persistence windows | ~4 min |
+| model scoring, 714 windows | ~2 min (SCM is `num_steps: 1`) |
+
+`debug` caps walltime at 1h as `resources_max`, not a default, so this does not
+fit in one job -- and the fit does not depend on the checkpoint, so paying it
+per checkpoint is pure waste. It is now **cached** under `<root>/clim_cache`,
+keyed on root/split/delta/init_hours/variables. Warm it once, then score:
+
+```
+qsub -v CHECKPOINT= scripts/aurora-obs-eval.sh                  # ~36 min
+qsub -v CHECKPOINT=/abs/path/checkpoint-003400.pt scripts/aurora-obs-eval.sh
+```
+
+Note the shape of that table: **the model is the cheapest part**. The instinct
+to budget for sampling is wrong here -- a consistency model is one network
+evaluation per window. Budget for the baseline.
+
+Three traps found while building this, each of which cost or would have cost a
+job:
+
+- **It cannot run on a login node.** `eval_masked.py` imports ezpz to get a
+  torch device, and importing ezpz initializes MPI. This is why it needs a
+  `qsub` at all, and it is not obvious until it hangs.
+- **`np.savez` appends `.npz`.** The cache writes to a pid-unique temp name and
+  renames (two jobs racing on one key would otherwise interleave into a corrupt
+  archive). A temp name not ending in `.npz` is silently written *with* the
+  suffix and the rename then fails on a missing file -- after the 30-minute fit,
+  caching nothing. Caught by a 3-variable round-trip test, not in the queue.
+- **Its defaults are the four surface variables on `swift_root`.** Scoring a
+  69-channel checkpoint with those builds a 4-channel net from
+  `ds.n_target_channels` and then loads 69 channels into it. `aurora-obs-eval.sh`
+  parses the variable list out of the data config so the two cannot drift; order
+  matters as much as membership, since a reordered list scores each channel
+  against the wrong target **without erroring**.
+
+Unrelated but adjacent: stdout block-buffers into the PBS log, so a job working
+normally can show 20+ minutes of nothing. `python3 -u`. Job 8879154 was deleted
+as a suspected hang on exactly this evidence before it was measured properly.
+
+### make_report.py's boilerplate was stale
+
+Worth knowing if you read a `work/nnja/reports/report-<jobid>.md` written before
+2026-09-29. Its "The bar" table printed **6h surface** baselines under a heading
+that did not say so, directly beneath a 69-variable **12h** run's results --
+inviting a comparison of 2t against 4.4137 when the right bar is 3.6367. It also
+claimed `--checkpoint` was "still a stub" (untrue since scoring was wired up),
+gave a login-shell command that cannot work (MPI, above), and cited "1214
+training windows, ~412 epochs at 500 kimg" from the old surface run. Fixed, and
+the caveats now state that the in-training `val/rmse` is all-cell.
+
 ### New files
 
 | file | purpose |
@@ -1863,6 +1922,7 @@ the bar**, and it is a harder one.
 | `configs/experiment/obs-nnja-11y-69v-swinv2-1.4-scm.yaml` | epoch-matched schedules (half the samples -> half the kimg) |
 | `work/nnja/measure_sigma_data.py` | measures `sigma_data` from the assembled target |
 | `scripts/aurora-obs-scaling.sh` | 10 nodes on `debug-scaling` |
+| `scripts/aurora-obs-eval.sh` | masked-RMSE scoring; `CHECKPOINT=` empty warms the climatology cache |
 | `work/nnja/finish_upperair.sh` | splits + stats + sigma_data, unattended |
 
 ### Still to do before launching
