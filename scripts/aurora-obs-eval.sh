@@ -29,9 +29,17 @@
 # diurnal column is the real one, because a model that beats only persistence
 # has not necessarily learned anything a lookup table could not do.
 #
-# Usage:
+# TWO JOBS, NOT ONE. `debug` caps walltime at 1h (hard -- resources_max), and
+# fitting the diurnal-climatology baseline on the 69-variable train split takes
+# ~30 min of that. So warm the cache first, then score:
+#
+#   qsub -v CHECKPOINT= scripts/aurora-obs-eval.sh                # ~35 min
 #   qsub -v CHECKPOINT=/abs/path/checkpoint-003400.pt scripts/aurora-obs-eval.sh
-#   qsub -v CHECKPOINT=...,LIMIT=50 scripts/aurora-obs-eval.sh   # quick smoke
+#
+# Only the first is slow; the cache is keyed on root/split/delta/init_hours/
+# variables and is reused by every later checkpoint. Add LIMIT=50 for a smoke
+# test. Note `debug` allows ONE queued job per user, so submit them in order,
+# not as a pair.
 #
 # VARS defaults to all 69 in the data config's ORDER. That order is not
 # cosmetic: eval_masked.py builds the net with img_channels=ds.n_target_channels
@@ -82,13 +90,24 @@ ezpz_setup_env
 : ${INIT_HOURS:=0,12}
 : ${LIMIT:=0}
 
-if [ -z "$CHECKPOINT" ]; then
-  echo "FATAL: pass -v CHECKPOINT=/abs/path/to/checkpoint-NNNNNN.pt" >&2
-  exit 1
-fi
-if [ ! -f "$CHECKPOINT" ]; then
+# CHECKPOINT="" is legal and means "baselines only". That is the cache-warming
+# mode: the diurnal climatology is fitted on the train split and does not
+# depend on the checkpoint, but it costs ~30 min on the 69-variable root --
+# over half a debug job, before the model is touched. Warm it once:
+#
+#   qsub -v CHECKPOINT= scripts/aurora-obs-eval.sh        # ~35 min, caches
+#   qsub -v CHECKPOINT=/abs/path.pt scripts/aurora-obs-eval.sh   # then scores
+#
+# The second job reads the cache in seconds and spends its hour on the model.
+if [ -n "$CHECKPOINT" ] && [ ! -f "$CHECKPOINT" ]; then
   echo "FATAL: no such checkpoint: $CHECKPOINT" >&2
   exit 1
+fi
+CKARG=()
+if [ -n "$CHECKPOINT" ]; then
+  CKARG=(--checkpoint "$CHECKPOINT")
+else
+  echo "NOTE: no CHECKPOINT given -- baselines only (warms the climatology cache)"
 fi
 
 # All 69, in data-config order. Built from the config itself rather than
@@ -109,17 +128,20 @@ if [ -z "$VARS" ]; then
 fi
 
 echo "EXPERIMENT=$EXPERIMENT"
-echo "CHECKPOINT=$CHECKPOINT"
+echo "CHECKPOINT=${CHECKPOINT:-<none, baselines only>}"
 echo "SPLIT=$SPLIT  DELTA=${DELTA}h  INIT_HOURS=$INIT_HOURS  LIMIT=$LIMIT"
 echo "VARS=$(echo $VARS | tr ',' '\n' | wc -l) variables"
 
-python3 /lus/flare/projects/Swift-Reanalysis/work/nnja/eval_masked.py \
+# -u: without it stdout block-buffers into the PBS log and a job that is
+# working normally looks hung for tens of minutes -- which is exactly how
+# job 8879154 read before it was diagnosed.
+python3 -u /lus/flare/projects/Swift-Reanalysis/work/nnja/eval_masked.py \
     --root "$ROOT" \
     --split "$SPLIT" \
     --delta "$DELTA" \
     --init-hours "$INIT_HOURS" \
     --experiment "$EXPERIMENT" \
-    --checkpoint "$CHECKPOINT" \
+    "${CKARG[@]}" \
     --variables "$VARS" \
     --limit "$LIMIT"
 RC=$?
