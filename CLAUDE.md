@@ -1097,7 +1097,7 @@ approximation: a usually-observed cell missing in a given window still
 contributes a down-weighted spurious residual. Upgrade path if results are
 ambiguous is a true per-sample mask, which does need the batch contract changed.
 
-### Three environment traps
+### Four environment traps
 
 1. **Three modules, not one.** `swift_env` has no torch. Torch 2.10 + IPEX are
    in `module load frameworks`; **`hdf5/1.14.6` is a separate module and is
@@ -1116,6 +1116,33 @@ ambiguous is a true per-sample mask, which does need the batch contract changed.
 3. **Importing a model inits MPI**, which aborts on a login node
    (`Fatal error in internal_Init_thread`). Anything touching `swift.models` or
    `swift.train` has to go through `qsub`; `aurora-obs-check.sh` exists for that.
+4. **Aurora's module defaults move under you -- pin `oneapi`, not just
+   `frameworks`.** (2026-09-29, cost one job and a queue cycle.) The default
+   tree rolled `26.26.0 -> 26.181.0` during four idle days (frameworks
+   2025.3.1 -> 2026.1.0, oneapi 2025.3.1 -> 2026.1.0) and job 8878917 died at
+   startup with:
+
+       OSError: libmkl_intel_lp64.so.2: cannot open shared object file
+
+   `swift/venv` layers over frameworks 2025.3.1 via `--system-site-packages`,
+   so torch still resolves out of `/opt/aurora/26.26.0/...`, and that torch
+   links `libmkl_intel_lp64.so.2` (oneAPI 2025.3). The new default ships
+   `.so.3` only.
+
+   **Pinning `frameworks/2025.3.1` alone does NOT fix this** -- verified
+   directly, it fails identically. The `oneapi` module is what puts MKL on
+   `LD_LIBRARY_PATH`, and the default environment loads `oneapi/release/2026.1.0`
+   *before* the job script runs, so it must be explicitly swapped back:
+
+       module load oneapi/release/2025.3.1
+       module load frameworks/2025.3.1 hdf5/1.14.6
+
+   Both trees stay under `MODULEPATH`, so the old versions remain loadable.
+   All three `scripts/aurora-obs*.sh` are pinned this way, and
+   `aurora-obs-scaling.sh` now treats the `import torch` as a hard gate rather
+   than an echo, so this class of drift fails before 10 nodes of walltime are
+   committed. **If a pinned version is ever retired, rebuild the venv against
+   the new frameworks -- do not unpin.** Unpinning is what caused the outage.
 
 ### sigma_data was wrong by 3x
 
@@ -1744,8 +1771,29 @@ is a one-line `loss.var_weights` override to test.
 
 The full Swift was trained on **10 `debug-scaling` nodes**, not the 1 `debug`
 node the surface runs used. `debug-scaling` allows 1-256 nodes at the same 1 h
-cap and the same one-running/one-queued limit -- so a 10-node job competes with
-the surface chain for that single slot, but the chain logic needs no change.
+cap.
+
+**Correction (2026-09-29): the chain logic does NOT work here.** An earlier
+version of this section said `debug-scaling` had "the same one-running/
+one-queued limit" and that `chain-resume.sh` needed no change. Measured with
+`qstat -Qf debug-scaling`:
+
+    max_run                = [u:PBS_GENERIC=1]
+    queued_jobs_threshold  = [u:PBS_GENERIC=1]
+
+That is **one queued job TOTAL**, and a dependency-held job still occupies
+that single Q slot. So the second `qsub` in `chain-resume.sh` is rejected
+outright:
+
+    qsub: would exceed queue generic's per-user limit of jobs in 'Q' state
+
+`chain-resume.sh` can only ever place its FIRST job on this queue. **Resume
+one job at a time**, submitting the next after the previous starts running.
+
+Related trap: **PBS snapshots the job script at submission time.** A job
+already queued keeps the version of the script it was submitted with, so a
+fix landed afterwards does not reach it. `qdel` and resubmit rather than
+`qhold`/`qrls` when the script itself is what changed.
 
 Moving there re-exposes the kimg/epoch trap in a new form.
 `scripts/aurora-obs.sh` sets `BATCH_SIZE = num_gpus * LOCAL_BATCH_SIZE`, so the
