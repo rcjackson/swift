@@ -2162,15 +2162,27 @@ regress because normalisation dilutes the 4 surface channels from 76.9% to
 20.6%, and named `loss.var_weights` as the one-line fix. That prediction was
 tested (`obs-nnja-11y-69v-surfw-swinv2-1.4-scm`, k=3.846, surface block
 20.6% -> 50.0%) and **it made things worse, in the direction opposite to the
-hypothesis**. At matched kimg 1728, all-cell validation:
+hypothesis**. Averaged over all 3 rollout steps, part-0 vs part-0, kimg>=1400:
 
 | var  | baseline | surfw  | ratio |
 |------|----------|--------|-------|
-| 2t   |   6.1432 | 7.4569 | 1.214 |
-| 10m u|   2.3189 | 2.7196 | 1.173 |
-| msl  | 437.5935 | 464.53 | 1.062 |
-| z500 | 2024.58  | 985.52 | 0.487 |
-| t850 |  10.6266 | 5.0561 | 0.476 |
+| 2t   |   8.4586 | 9.8713 | 1.167 |
+| msl  | 714.8752 | 853.66 | 1.194 |
+| 10m u|   3.3390 | 3.7293 | 1.117 |
+| z500 | 1332.74  | 1265.2 | 0.949 |
+| t850 |   6.8034 | 6.4728 | 0.951 |
+
+All four surface variables 12-19% WORSE, upper air essentially unchanged.
+A pure loss with no compensating gain.
+
+READ ONLY ROLLOUT STEP 0 AND YOU GET A COMPLETELY DIFFERENT, WRONG ANSWER
+(z500 0.493, t850 0.473 -- an apparent halving of upper-air error). Baseline
+job 8867573 (part 0) has a defect in the first rollout step: its step-0 z500
+reads ~2050 while steps 1 and 2 of the SAME validation call read ~890/1020.
+It is stable across all 66 of that part's validation points and absent from
+part 1 (8878970) and from both surfw jobs. Comparing a good step 0 against a
+broken one manufactured the entire "upper air halved" result. Average over
+all rollout steps, and compare part N against part N.
 
 THE REASON, and it generalises to any reweighting on this data. In every loss
 class the weights multiply: `w_obs * w_var * w_lat`. `w_obs` confines the
